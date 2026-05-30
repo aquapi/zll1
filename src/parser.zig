@@ -83,12 +83,9 @@ pub fn Union(comptime Parsers: anytype) type {
         pub const Result = ParserResult;
 
         pub inline fn parse(trimmedInput: []const u8) ?ParseResult(Result) {
-            inline for (fields, 0..) |field, i| {
-                const Parser = @field(Parsers, field.name);
-
-                if (if (i == 0) Parser.parse(trimmedInput) else Parser.parse(trimWhitespacesStart(trimmedInput))) |parseResult|
+            inline for (fields) |field|
+                if (@field(Parsers, field.name).parse(trimmedInput)) |parseResult|
                     return .{ .result = @unionInit(Result, field.name, parseResult.result), .rest = parseResult.rest };
-            }
 
             return null;
         }
@@ -115,7 +112,7 @@ test "Tuple" {
 
 test "Union" {
     const Parser = Union(.{ .x = Const(true, "x"), .y = Const(true, "y"), .z = Const(true, "z") });
-    std.debug.print("\nUnion: {any}\n", .{ Parser });
+    std.debug.print("\nUnion: {any}\n", .{Parser});
 
     const parsed = Parser.parse("y").?.result;
     switch (parsed) {
