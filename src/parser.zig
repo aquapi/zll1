@@ -1,7 +1,7 @@
 const std = @import("std");
 const mem = std.mem;
 
-const char = @import("./char.zig");
+const utils = @import("./utils.zig");
 
 // Trim
 fn trimWhitespacesStart(input: []const u8) []const u8 {
@@ -9,19 +9,76 @@ fn trimWhitespacesStart(input: []const u8) []const u8 {
 }
 
 // Parsers
-pub fn ParseResult(comptime T: type) type {
-    return struct { result: T, rest: []const u8 };
+pub fn ParsedResult(comptime T: type) type {
+    return struct { value: T, rest: []const u8 };
 }
 
 pub fn Const(comptime result: anytype, comptime prefix: []const u8) type {
     return struct {
         pub const Result = @TypeOf(result);
 
-        pub inline fn parse(trimmedInput: []const u8) ?ParseResult(Result) {
-            return if (mem.startsWith(u8, trimmedInput, prefix)) .{ .result = result, .rest = trimmedInput[prefix.len..] } else null;
+        pub inline fn parse(trimmedInput: []const u8) ?ParsedResult(Result) {
+            return if (mem.startsWith(u8, trimmedInput, prefix)) .{ .value = result, .rest = trimmedInput[prefix.len..] } else null;
         }
     };
 }
+
+// Numbers
+pub const UInt = struct {
+    pub const Result = []const u8;
+
+    pub fn parse(trimmedInput: []const u8) ?ParsedResult(Result) {
+        if (trimmedInput.len > 0) {
+            @branchHint(.likely);
+
+            switch (trimmedInput[0]) {
+                '0' => return .{ .value = "0", .rest = trimmedInput[1..] },
+                '1'...'9' => {
+                    const rest = mem.trimStart(u8, trimmedInput[1..], utils.DIGITS);
+                    return .{ .value = trimmedInput[0 .. trimmedInput.len - rest.len], .rest = rest };
+                },
+                else => {},
+            }
+        }
+
+        return null;
+    }
+};
+
+pub const Int = struct {
+    pub const Result = []const u8;
+
+    pub fn parse(trimmedInput: []const u8) ?ParsedResult(Result) {
+        if (trimmedInput.len > 0) {
+            @branchHint(.likely);
+
+            switch (trimmedInput[0]) {
+                '0' => return .{ .value = "0", .rest = trimmedInput[1..] },
+                '1'...'9' => {
+                    const rest = mem.trimStart(u8, trimmedInput[1..], utils.DIGITS);
+                    return .{ .value = trimmedInput[0 .. trimmedInput.len - rest.len], .rest = rest };
+                },
+                '-' => {
+                    if (trimmedInput.len > 1) {
+                        @branchHint(.likely);
+
+                        switch (trimmedInput[1]) {
+                            '0' => return .{ .value = "0", .rest = trimmedInput[2..] },
+                            '1'...'9' => {
+                                const rest = mem.trimStart(u8, trimmedInput[2..], utils.DIGITS);
+                                return .{ .value = trimmedInput[0 .. trimmedInput.len - rest.len], .rest = rest };
+                            },
+                            else => {},
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
+
+        return null;
+    }
+};
 
 pub fn Tuple(comptime Parsers: anytype) type {
     comptime var Types: [Parsers.len]type = undefined;
@@ -31,7 +88,7 @@ pub fn Tuple(comptime Parsers: anytype) type {
     return struct {
         pub const Result = ParserResult;
 
-        pub inline fn parse(trimmedInput: []const u8) ?ParseResult(Result) {
+        pub inline fn parse(trimmedInput: []const u8) ?ParsedResult(Result) {
             var result: Result = undefined;
 
             var remaining = trimmedInput;
@@ -39,14 +96,14 @@ pub fn Tuple(comptime Parsers: anytype) type {
                 if (if (i == 0)
                     Parser.parse(remaining)
                 else
-                    Parser.parse(trimWhitespacesStart(remaining))) |parseResult|
+                    Parser.parse(trimWhitespacesStart(remaining))) |parsedResult|
                 {
-                    result[i] = parseResult.result;
-                    remaining = parseResult.rest;
+                    result[i] = parsedResult.value;
+                    remaining = parsedResult.rest;
                 } else return null;
             }
 
-            return .{ .result = result, .rest = remaining };
+            return .{ .value = result, .rest = remaining };
         }
     };
 }
@@ -82,14 +139,18 @@ pub fn Union(comptime Parsers: anytype) type {
     return struct {
         pub const Result = ParserResult;
 
-        pub inline fn parse(trimmedInput: []const u8) ?ParseResult(Result) {
+        pub inline fn parse(trimmedInput: []const u8) ?ParsedResult(Result) {
             inline for (fields) |field|
-                if (@field(Parsers, field.name).parse(trimmedInput)) |parseResult|
-                    return .{ .result = @unionInit(Result, field.name, parseResult.result), .rest = parseResult.rest };
+                if (@field(Parsers, field.name).parse(trimmedInput)) |parsedResult|
+                    return .{ .value = @unionInit(Result, field.name, parsedResult.value), .rest = parsedResult.rest };
 
             return null;
         }
     };
+}
+
+pub fn parse(comptime T: anytype, input: []const u8) ?T.Result {
+    return if (T.parse(trimWhitespacesStart(input))) |parsedResult| parsedResult.value else null;
 }
 
 const testing = std.testing;
@@ -97,24 +158,27 @@ const Value = enum(u8) { x, y, z };
 
 test "Const" {
     const Parser = Const(Value.x, "x");
-    try testing.expect(Parser.parse("x").?.result == .x);
+    try testing.expect(parse(Parser, "x").? == .x);
+}
+
+test "Integers" {
+    try testing.expect(mem.eql(u8, parse(UInt, " 32 ").?, "32"));
+    try testing.expect(mem.eql(u8, parse(Int, " -32 ").?, "-32"));
 }
 
 test "Tuple" {
     const Parser = Tuple(.{ Const(Value.x, "x"), Const(Value.y, "y"), Const(Value.z, "z") });
 
-    const parsed = Parser.parse("x y z t").?;
-    try testing.expect(parsed.result[0] == .x);
-    try testing.expect(parsed.result[1] == .y);
-    try testing.expect(parsed.result[2] == .z);
-    try testing.expect(mem.eql(u8, parsed.rest, " t"));
+    const value = parse(Parser, " x y z t").?;
+    try testing.expect(value[0] == .x);
+    try testing.expect(value[1] == .y);
+    try testing.expect(value[2] == .z);
 }
 
 test "Union" {
     const Parser = Union(.{ .x = Const(true, "x"), .y = Const(true, "y"), .z = Const(true, "z") });
-    std.debug.print("\nUnion: {any}\n", .{Parser});
 
-    const parsed = Parser.parse("y").?.result;
+    const parsed = parse(Parser, "y t").?;
     switch (parsed) {
         .y => {},
         else => try testing.expect(false),

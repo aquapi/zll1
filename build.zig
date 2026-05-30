@@ -18,7 +18,7 @@ pub fn build(b: *std.Build) void {
 
     const run_test = b.addRunArtifact(
       b.addTest(.{
-        .root_module = zll1
+        .root_module = zll1,
       })
     );
     const test_step = b.step("test", "Run unit tests");
