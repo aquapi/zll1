@@ -16,10 +16,10 @@ pub fn Parsed(comptime T: type) type {
 // Constant
 pub fn Const(comptime prefix: []const u8) type {
     return struct {
-        pub const Value = bool;
+        pub const Value = struct {};
 
         pub inline fn parse(_: mem.Allocator, trimmedInput: []const u8) ?Parsed(Value) {
-            return if (mem.startsWith(u8, trimmedInput, prefix)) .{ .value = true, .rest = trimmedInput[prefix.len..] } else null;
+            return if (mem.startsWith(u8, trimmedInput, prefix)) .{ .value = .{}, .rest = trimmedInput[prefix.len..] } else null;
         }
     };
 }
@@ -161,7 +161,7 @@ const testing = std.testing;
 
 test "Const" {
     const Parser = Const("x");
-    try testing.expect(parse(Parser, testing.allocator, "x").?);
+    try testing.expect(parse(Parser, testing.allocator, "x") != null);
 }
 
 test "Integers" {
@@ -172,10 +172,7 @@ test "Integers" {
 test "Tuple" {
     const Parser = Tuple(.{ Const("x"), Const("y"), Const("z") });
 
-    const value = parse(Parser, testing.allocator, " x y z t").?;
-    try testing.expect(value[0]);
-    try testing.expect(value[1]);
-    try testing.expect(value[2]);
+    try testing.expect(parse(Parser, testing.allocator, " x y z t") != null);
 }
 
 test "Union" {
@@ -189,11 +186,12 @@ test "Union" {
 }
 
 // const Grammar = struct {
-//         pub const Root = Union(.{
-//             .end = Const(.end, "end"),
+//     pub const Root = Union(.{
+//         .end = Const(.end, "end"),
 //             .next = Tuple(.{
-//                 Union(.{ .x = Const(.x, "x"), .y = Const(.y, "y") }),
-//                 Ref("Root", @This()), // Reference back to the top
+//                 Union(.{ .x = Const("x"), .y = Const("y") }),
+//                 Ref(Root)
 //             }),
 //         });
 //     };
+// };
