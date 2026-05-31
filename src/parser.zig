@@ -14,12 +14,12 @@ pub fn Parsed(comptime T: type) type {
 }
 
 // Constant
-pub fn Const(comptime result: anytype, comptime prefix: []const u8) type {
+pub fn Const(comptime prefix: []const u8) type {
     return struct {
-        pub const Value = @TypeOf(result);
+        pub const Value = bool;
 
         pub inline fn parse(_: mem.Allocator, trimmedInput: []const u8) ?Parsed(Value) {
-            return if (mem.startsWith(u8, trimmedInput, prefix)) .{ .value = result, .rest = trimmedInput[prefix.len..] } else null;
+            return if (mem.startsWith(u8, trimmedInput, prefix)) .{ .value = true, .rest = trimmedInput[prefix.len..] } else null;
         }
     };
 }
@@ -100,7 +100,7 @@ pub fn Tuple(comptime Parsers: anytype) type {
           inline for (Parsers, 0..) |Parser, i|
               if (Parser.parse(allocator, currentInput)) |token| {
                   value[i] = token.value;
-                  comptime if (i < Parsers.len - 1) {
+                  if (comptime i < Parsers.len - 1) {
                       currentInput = trimWhitespacesStart(token.rest);
                   } else return .{ .value = value, .rest = token.rest };
               } else return null;
@@ -160,8 +160,8 @@ pub fn parse(comptime T: anytype, allocator: mem.Allocator, input: []const u8) ?
 const testing = std.testing;
 
 test "Const" {
-    const Parser = Const(.x, "x");
-    try testing.expect(parse(Parser, testing.allocator, "x").? == .x);
+    const Parser = Const("x");
+    try testing.expect(parse(Parser, testing.allocator, "x").?);
 }
 
 test "Integers" {
@@ -170,16 +170,16 @@ test "Integers" {
 }
 
 test "Tuple" {
-    const Parser = Tuple(.{ Const(.x, "x"), Const(.y, "y"), Const(.z, "z") });
+    const Parser = Tuple(.{ Const("x"), Const("y"), Const("z") });
 
     const value = parse(Parser, testing.allocator, " x y z t").?;
-    try testing.expect(value[0] == .x);
-    try testing.expect(value[1] == .y);
-    try testing.expect(value[2] == .z);
+    try testing.expect(value[0]);
+    try testing.expect(value[1]);
+    try testing.expect(value[2]);
 }
 
 test "Union" {
-    const Parser = Union(.{ .x = Const(true, "x"), .y = Const(true, "y"), .z = Const(true, "z") });
+    const Parser = Union(.{ .x = Const("x"), .y = Const("y"), .z = Const("z") });
 
     const parsed = parse(Parser, testing.allocator, "y t").?;
     try testing.expect(switch (parsed) {
@@ -187,3 +187,13 @@ test "Union" {
         else => false,
     });
 }
+
+// const Grammar = struct {
+//         pub const Root = Union(.{
+//             .end = Const(.end, "end"),
+//             .next = Tuple(.{
+//                 Union(.{ .x = Const(.x, "x"), .y = Const(.y, "y") }),
+//                 Ref("Root", @This()), // Reference back to the top
+//             }),
+//         });
+//     };
