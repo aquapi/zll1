@@ -1,3 +1,5 @@
+const std = @import("std");
+
 pub fn charRange(comptime start: u8, comptime end: u8) [end - start + 1]u8 {
     comptime {
         if (end < start)
