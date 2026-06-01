@@ -221,6 +221,22 @@ pub fn Cache(comptime Parser: anytype) type {
     };
 }
 
+pub fn Recurse(comptime ParserInit: type) type {
+  return struct {
+    const T = ParserInit.init(@This());
+
+    pub const Value = T.Value;
+
+    pub fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?Parsed(Value) {
+        return T.parse(allocator, trimmedInput);
+    }
+
+    pub fn deparse(allocator: mem.Allocator, value: Value) void {
+        T.deparse(allocator, value);
+    }
+  };
+}
+
 pub fn parse(comptime T: anytype, allocator: mem.Allocator, input: []const u8) ?T.Value {
     return if (T.parse(allocator, trimWhitespacesStart(input))) |parsedResult| parsedResult.value else null;
 }
@@ -256,7 +272,7 @@ test "Union" {
 }
 
 test "Ref" {
-    const Recursive = struct {
+    const Parser = Recurse(struct {
       fn init(Self: type) type {
         return Cache(Union(.{
             .end = Const("end"),
@@ -266,21 +282,7 @@ test "Ref" {
             }),
         }));
       }
-    };
-
-    const Parser = struct {
-      const T = Recursive.init(@This());
-
-      pub const Value = T.Value;
-
-      pub fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?Parsed(Value) {
-          return T.parse(allocator, trimmedInput);
-      }
-
-      pub fn deparse(allocator: mem.Allocator, value: Value) void {
-          T.deparse(allocator, value);
-      }
-    };
+    });
 
     const allocator = testing.allocator;
 
