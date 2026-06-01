@@ -240,15 +240,15 @@ test "Union" {
 }
 
 test "Ref" {
-  const Parser = struct {
-    const Root = Union(.{
-        .end = Const("end"),
-        .next = Tuple(.{
-            Union(.{ .x = Const("x"), .y = Const("y") }),
-            Ref(Root), // hmm
-        }),
-    });
-  };
+    const Parser = struct {
+        const Root = Union(.{
+            .end = Const("end"),
+            .next = Tuple(.{
+                Union(.{ .x = Const("x"), .y = Const("y") }),
+                Ref(Root), // hmm
+            }),
+        });
+    };
 
     try testing.expect(parse(Parser.Root, testing.allocator, "x") != null);
 }
