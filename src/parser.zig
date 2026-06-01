@@ -21,6 +21,8 @@ pub fn Const(comptime prefix: []const u8) type {
         pub inline fn parse(_: mem.Allocator, trimmedInput: []const u8) ?Parsed(Value) {
             return if (mem.startsWith(u8, trimmedInput, prefix)) .{ .value = .{}, .rest = trimmedInput[prefix.len..] } else null;
         }
+
+        pub inline fn deparse(_: mem.Allocator, _: Value) void {}
     };
 }
 
@@ -44,6 +46,8 @@ pub const UInt = struct {
 
         return null;
     }
+
+    pub inline fn deparse(_: mem.Allocator, _: Value) void {}
 };
 
 pub const Int = struct {
@@ -79,78 +83,128 @@ pub const Int = struct {
 
         return null;
     }
+
+    pub inline fn deparse(_: mem.Allocator, _: Value) void {}
 };
 
 // Combinators
 pub fn Tuple(comptime Parsers: anytype) type {
-  comptime var parser_value_types: [Parsers.len]type = undefined;
+    comptime var parser_value_types: [Parsers.len]type = undefined;
 
-  for (Parsers, 0..) |Parser, i|
-      parser_value_types[i] = Parser.Value;
+    for (Parsers, 0..) |Parser, i|
+        parser_value_types[i] = Parser.Value;
 
-  const _Value = @Tuple(&parser_value_types);
+    const _Value = @Tuple(&parser_value_types);
 
-  return struct {
-      pub const Value = _Value;
+    return struct {
+        pub const Value = _Value;
 
-      pub inline fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?Parsed(@This().Value) {
-          var value: @This().Value = undefined;
-          var currentInput = trimmedInput;
+        pub inline fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?Parsed(@This().Value) {
+            var value: @This().Value = undefined;
+            var currentInput = trimmedInput;
 
-          inline for (Parsers, 0..) |Parser, i|
-              if (Parser.parse(allocator, currentInput)) |token| {
-                  value[i] = token.value;
-                  if (comptime i < Parsers.len - 1) {
-                      currentInput = trimWhitespacesStart(token.rest);
-                  } else return .{ .value = value, .rest = token.rest };
-              } else return null;
-      }
-  };
+            const freeIdx: usize = {
+                inline for (Parsers, 0..) |Parser, i|
+                    if (Parser.parse(allocator, currentInput)) |token| {
+                        value[i] = token.value;
+                        if (comptime i < Parsers.len - 1)
+                            currentInput = trimWhitespacesStart(token.rest)
+                        else
+                            return .{ .value = value, .rest = token.rest };
+                    } else break i;
+            };
+
+            inline for (Parsers, 0..) |Parser, i|
+                if (i <= freeIdx)
+                    Parser.deparse(allocator, value[i])
+                else
+                    return null;
+        }
+
+        pub inline fn deparse(allocator: mem.Allocator, value: Value) void {
+            inline for (Parsers) |Parser|
+                Parser.deparse(allocator, value);
+        }
+    };
 }
 
 pub fn Union(comptime Parsers: anytype) type {
-  const fields = std.meta.fields(@TypeOf(Parsers));
+    const fields = std.meta.fields(@TypeOf(Parsers));
 
-  comptime var names: [fields.len][]const u8 = undefined;
-  comptime var parsers: [fields.len]type = undefined;
-  comptime var parser_value_types: [fields.len]type = undefined;
-  comptime var attrs: [fields.len]std.builtin.Type.UnionField.Attributes = undefined;
-  comptime var values: [fields.len]u8 = undefined;
+    comptime var names: [fields.len][]const u8 = undefined;
+    comptime var parsers: [fields.len]type = undefined;
+    comptime var parser_value_types: [fields.len]type = undefined;
+    comptime var attrs: [fields.len]std.builtin.Type.UnionField.Attributes = undefined;
+    comptime var values: [fields.len]u8 = undefined;
 
-  inline for (fields, 0..) |field, i| {
-      names[i] = field.name;
-      parsers[i] = @field(Parsers, field.name);
-      parser_value_types[i] = parsers[i].Value;
-      attrs[i] = .{};
-      values[i] = i;
-  }
+    inline for (fields, 0..) |field, i| {
+        names[i] = field.name;
+        parsers[i] = @field(Parsers, field.name);
+        parser_value_types[i] = parsers[i].Value;
+        attrs[i] = .{};
+        values[i] = i;
+    }
 
-  const _Value = @Union(
-      .auto,
-      @Enum(
-          u8,
-          .exhaustive,
-          &names,
-          &values,
-      ),
-      &names,
-      &parser_value_types,
-      &attrs,
-  );
-  const _ScopedParsers = parsers;
+    const _Value = @Union(
+        .auto,
+        @Enum(
+            u8,
+            .exhaustive,
+            &names,
+            &values,
+        ),
+        &names,
+        &parser_value_types,
+        &attrs,
+    );
+    const _ScopedParsers = parsers;
 
-  return struct {
-      pub const Value = _Value;
+    return struct {
+        pub const Value = _Value;
 
-      const ScopedParsers = _ScopedParsers;
-      pub inline fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?Parsed(@This().Value) {
-          inline for (fields, 0..) |field, i|
-              if (ScopedParsers[i].parse(allocator, trimmedInput)) |parsedResult|
-                  return .{ .value = @unionInit(@This().Value, field.name, parsedResult.value), .rest = parsedResult.rest };
+        const ScopedParsers = _ScopedParsers;
+        pub inline fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?Parsed(@This().Value) {
+            inline for (fields, 0..) |field, i|
+                if (ScopedParsers[i].parse(allocator, trimmedInput)) |parsedResult|
+                    return .{ .value = @unionInit(@This().Value, field.name, parsedResult.value), .rest = parsedResult.rest };
 
-          return null;
-      }
-  };
+            return null;
+        }
+
+        pub inline fn deparse(allocator: mem.Allocator, value: Value) void {
+            switch (value) {
+                inline else => |payload| {
+                    // @tagName(value) resolves to a comptime string literal
+                    // inside each unrolled branch of the inline switch
+                    @field(Parsers, @tagName(value)).free(allocator, payload);
+                },
+            }
+        }
+    };
+}
+
+pub fn Ref(comptime Parser: anytype) type {
+    return struct {
+        pub const Value = *Parser.Value;
+
+        pub fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?Parsed(Value) {
+            if (Parser.parse(allocator, trimmedInput)) |token| {
+                const ptr = allocator.create(Parser.Value) catch {
+                    Parser.deparse(allocator, token.value);
+                    return null;
+                };
+                ptr.* = token.value;
+
+                return .{ .value = ptr, .rest = token.rest };
+            }
+
+            return null;
+        }
+
+        pub inline fn deparse(allocator: mem.Allocator, value: Value) void {
+            allocator.destroy(value);
+        }
+    };
 }
 
 pub fn parse(comptime T: anytype, allocator: mem.Allocator, input: []const u8) ?T.Value {
@@ -185,12 +239,26 @@ test "Union" {
     });
 }
 
+test "Ref" {
+  const Parser = struct {
+    const Root = Union(.{
+        .end = Const("end"),
+        .next = Tuple(.{
+            Union(.{ .x = Const("x"), .y = Const("y") }),
+            Ref(Root), // hmm
+        }),
+    });
+  };
+
+    try testing.expect(parse(Parser.Root, testing.allocator, "x") != null);
+}
+
 // const Grammar = struct {
 //     pub const Root = Union(.{
 //         .end = Const(.end, "end"),
 //             .next = Tuple(.{
 //                 Union(.{ .x = Const("x"), .y = Const("y") }),
-//                 Ref(Root)
+//                 Ref(Root) // Allocate memory for this
 //             }),
 //         });
 //     };
