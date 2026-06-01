@@ -181,10 +181,8 @@ pub fn Union(comptime Parsers: anytype) type {
     };
 }
 
-pub fn Ref(comptime ParserModule: anytype, comptime name: []const u8) type {
+pub fn Ref(comptime Parser: anytype) type {
     return struct {
-        const Parser = @field(ParserModule, name);
-
         pub const Value = *anyopaque;
 
         pub fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?Parsed(Value) {
@@ -258,17 +256,31 @@ test "Union" {
 }
 
 test "Ref" {
-    const Parser = (struct {
-        const Self = @This();
-
-        const Root = Cache(Union(.{
+    const Recursive = struct {
+      fn init(Self: type) type {
+        return Cache(Union(.{
             .end = Const("end"),
             .next = Tuple(.{
                 Union(.{ .x = Const("x"), .y = Const("y") }),
-                Ref(Self, "Root"), // hmm
+                Ref(Self), // hmm
             }),
         }));
-    }).Root;
+      }
+    };
+
+    const Parser = struct {
+      const T = Recursive.init(@This());
+
+      pub const Value = T.Value;
+
+      pub fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?Parsed(Value) {
+          return T.parse(allocator, trimmedInput);
+      }
+
+      pub fn deparse(allocator: mem.Allocator, value: Value) void {
+          T.deparse(allocator, value);
+      }
+    };
 
     const allocator = testing.allocator;
 
