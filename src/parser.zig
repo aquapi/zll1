@@ -1,4 +1,3 @@
-
 const std = @import("std");
 const mem = std.mem;
 
@@ -97,7 +96,7 @@ pub fn Tuple(comptime Parsers: anytype) type {
             for (Parsers, 0..) |Parser, i|
                 parser_value_types[i] = Parser.Value;
 
-           break :blk @Tuple(&parser_value_types);
+            break :blk @Tuple(&parser_value_types);
         };
 
         pub fn deparseUntil(allocator: mem.Allocator, freeIdx: usize, value: Value) void {
@@ -135,7 +134,7 @@ pub fn Union(comptime Parsers: anytype) type {
     const fields = std.meta.fields(@TypeOf(Parsers));
 
     return struct {
-      pub const Value = blk: {
+        pub const Value = blk: {
             var names: [fields.len][]const u8 = undefined;
             var parser_value_types: [fields.len]type = undefined;
             var attrs: [fields.len]std.builtin.Type.UnionField.Attributes = undefined;
@@ -222,19 +221,19 @@ pub fn Cache(comptime Parser: anytype) type {
 }
 
 pub fn Recurse(comptime ParserInit: type) type {
-  return struct {
-    const T = ParserInit.init(@This());
+    return struct {
+        const T = ParserInit.init(@This());
 
-    pub const Value = T.Value;
+        pub const Value = T.Value;
 
-    pub fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?Parsed(Value) {
-        return T.parse(allocator, trimmedInput);
-    }
+        pub fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?Parsed(Value) {
+            return T.parse(allocator, trimmedInput);
+        }
 
-    pub fn deparse(allocator: mem.Allocator, value: Value) void {
-        T.deparse(allocator, value);
-    }
-  };
+        pub fn deparse(allocator: mem.Allocator, value: Value) void {
+            T.deparse(allocator, value);
+        }
+    };
 }
 
 pub fn parse(comptime T: anytype, allocator: mem.Allocator, input: []const u8) ?T.Value {
@@ -273,15 +272,15 @@ test "Union" {
 
 test "Ref" {
     const Parser = Recurse(struct {
-      fn init(Self: type) type {
-        return Cache(Union(.{
-            .end = Const("end"),
-            .next = Tuple(.{
-                Union(.{ .x = Const("x"), .y = Const("y") }),
-                Ref(Self), // hmm
-            }),
-        }));
-      }
+        fn init(Self: type) type {
+            return Union(.{
+                .end = Const("end"),
+                .next = Tuple(.{
+                    Union(.{ .x = Const("x"), .y = Const("y") }),
+                    Ref(Self), // hmm
+                }),
+            });
+        }
     });
 
     const allocator = testing.allocator;
