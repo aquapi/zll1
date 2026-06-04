@@ -13,3 +13,5 @@ pub fn charRange(comptime start: u8, comptime end: u8) [end - start + 1]u8 {
 }
 
 pub const DIGITS = &charRange('0', '9');
+pub const ID_START = &charRange('a', 'z') + &charRange('A', 'Z') + "_$";
+pub const ID = ID_START + DIGITS;

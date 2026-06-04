@@ -26,7 +26,7 @@ pub fn Const(comptime prefix: []const u8) type {
     };
 }
 
-// Numbers
+// Built-in parsers
 pub const UInt = struct {
     pub const Value = []const u8;
 
@@ -182,7 +182,13 @@ pub fn Union(comptime Parsers: anytype) type {
 
 pub fn Ref(comptime Parser: anytype) type {
     return struct {
-        pub const Value = *anyopaque;
+        pub const Value = struct {
+          ptr: *anyopaque,
+
+          fn unwrap(self: @This()) *Parser.Value {
+            return @ptrCast(@alignCast(self.ptr));
+          }
+        };
 
         pub fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?Parsed(Value) {
             if (Parser.parse(allocator, trimmedInput)) |token| {
@@ -192,14 +198,14 @@ pub fn Ref(comptime Parser: anytype) type {
                 };
                 ptr.* = token.value;
 
-                return .{ .value = ptr, .rest = token.rest };
+                return .{ .value = .{ .ptr = ptr }, .rest = token.rest };
             }
 
             return null;
         }
 
         pub fn deparse(allocator: mem.Allocator, value: Value) void {
-            const ptr: *Parser.Value = @ptrCast(@alignCast(value));
+            const ptr = value.unwrap();
             Parser.deparse(allocator, ptr.*);
             allocator.destroy(ptr);
         }
