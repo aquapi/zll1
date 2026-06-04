@@ -2,6 +2,9 @@
     .name = .zll1,
     .version = "0.0.1",
     .minimum_zig_version = "0.16.0",
-    .paths = .{""},
+    .paths = .{
+      "build.zig",
+      "src"
+    },
     .fingerprint = 0xfc9d893173e73462,
 }
