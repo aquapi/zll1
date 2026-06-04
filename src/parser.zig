@@ -2,23 +2,14 @@ const std = @import("std");
 const mem = std.mem;
 
 const utils = @import("./utils.zig");
-
-// Trim
-fn trimWhitespacesStart(input: []const u8) []const u8 {
-    return mem.trimStart(u8, input, " \n\r\t");
-}
-
-// Parsed value and type resolution
-pub fn Parsed(comptime T: anytype) type {
-    return struct { value: T, rest: []const u8 };
-}
+const parser = @This();
 
 // Constant
 pub fn Const(comptime prefix: []const u8) type {
     return struct {
         pub const Value = struct {};
 
-        pub inline fn parse(_: mem.Allocator, trimmedInput: []const u8) ?Parsed(Value) {
+        pub inline fn parse(_: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
             return if (mem.startsWith(u8, trimmedInput, prefix)) .{ .value = .{}, .rest = trimmedInput[prefix.len..] } else null;
         }
 
@@ -30,21 +21,17 @@ pub fn Const(comptime prefix: []const u8) type {
 pub const UInt = struct {
     pub const Value = []const u8;
 
-    pub fn parse(_: mem.Allocator, trimmedInput: []const u8) ?Parsed(Value) {
-        if (trimmedInput.len > 0) {
-            @branchHint(.likely);
-
-            switch (trimmedInput[0]) {
-                '0' => return .{ .value = "0", .rest = trimmedInput[1..] },
-                '1'...'9' => {
-                    const rest = mem.trimStart(u8, trimmedInput[1..], utils.DIGITS);
-                    return .{ .value = trimmedInput[0 .. trimmedInput.len - rest.len], .rest = rest };
-                },
-                else => {},
-            }
+    pub fn parse(_: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
+        if (trimmedInput.len == 0) {
+            @branchHint(.unlikely);
+            return null;
         }
 
-        return null;
+        return switch (trimmedInput[0]) {
+            '0' => .{ .value = "0", .rest = trimmedInput[1..] },
+            '1'...'9' => utils.consumeChars(trimmedInput, 1, utils.DIGITS),
+            else => null,
+        };
     }
 
     pub inline fn deparse(_: mem.Allocator, _: Value) void {}
@@ -53,35 +40,45 @@ pub const UInt = struct {
 pub const Int = struct {
     pub const Value = []const u8;
 
-    pub fn parse(_: mem.Allocator, trimmedInput: []const u8) ?Parsed(Value) {
-        if (trimmedInput.len > 0) {
-            @branchHint(.likely);
+    pub fn parse(_: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
+        if (trimmedInput.len < 2) {
+            @branchHint(.unlikely);
 
-            switch (trimmedInput[0]) {
-                '0' => return .{ .value = "0", .rest = trimmedInput[1..] },
-                '1'...'9' => {
-                    const rest = mem.trimStart(u8, trimmedInput[1..], utils.DIGITS);
-                    return .{ .value = trimmedInput[0 .. trimmedInput.len - rest.len], .rest = rest };
-                },
-                '-' => {
-                    if (trimmedInput.len > 1) {
-                        @branchHint(.likely);
-
-                        switch (trimmedInput[1]) {
-                            '0' => return .{ .value = "0", .rest = trimmedInput[2..] },
-                            '1'...'9' => {
-                                const rest = mem.trimStart(u8, trimmedInput[2..], utils.DIGITS);
-                                return .{ .value = trimmedInput[0 .. trimmedInput.len - rest.len], .rest = rest };
-                            },
-                            else => {},
-                        }
-                    }
-                },
-                else => {},
-            }
+            return if (trimmedInput.len == 1) switch (trimmedInput[0]) {
+                '0'...'9' => .{ .value = trimmedInput[0..1], .rest = trimmedInput[1..] },
+                else => null,
+            } else null;
         }
 
-        return null;
+        return switch (trimmedInput[0]) {
+            '0' => .{ .value = trimmedInput[0..1], .rest = trimmedInput[1..] },
+            '1'...'9' => utils.consumeChars(trimmedInput, 1, utils.DIGITS),
+            '-' => switch (trimmedInput[1]) {
+                '0' => .{ .value = trimmedInput[1..2], .rest = trimmedInput[2..] },
+                '1'...'9' => utils.consumeChars(trimmedInput, 2, utils.DIGITS),
+                else => null,
+            },
+            else => null,
+        };
+    }
+
+    pub inline fn deparse(_: mem.Allocator, _: Value) void {}
+};
+
+/// Identifier parser.
+pub const Ident = struct {
+    pub const Value = []const u8;
+
+    pub fn parse(_: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
+        if (trimmedInput.len == 0) {
+            @branchHint(.unlikely);
+            return null;
+        }
+
+        return switch (trimmedInput[0]) {
+            'a'...'z', 'A'...'Z', '$', '_' => utils.consumeChars(trimmedInput, 1, utils.IDENT),
+            else => null,
+        };
     }
 
     pub inline fn deparse(_: mem.Allocator, _: Value) void {}
@@ -89,8 +86,8 @@ pub const Int = struct {
 
 // Combinators
 pub fn Tuple(comptime Parsers: anytype) type {
-    return struct {
-        pub const Value = blk: {
+    const Internal = struct {
+        const Value = blk: {
             var parser_value_types: [Parsers.len]type = undefined;
 
             for (Parsers, 0..) |Parser, i|
@@ -99,13 +96,17 @@ pub fn Tuple(comptime Parsers: anytype) type {
             break :blk @Tuple(&parser_value_types);
         };
 
-        pub fn deparseUntil(allocator: mem.Allocator, freeIdx: usize, value: Value) void {
+        fn deparseUntil(allocator: mem.Allocator, freeIdx: usize, value: Value) void {
             inline for (Parsers, 0..) |Parser, i|
                 if (i < freeIdx)
                     Parser.deparse(allocator, value[i]);
         }
+    };
 
-        pub inline fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?Parsed(Value) {
+    return struct {
+        pub const Value = Internal.Value;
+
+        pub inline fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
             var value: Value = undefined;
             var currentInput = trimmedInput;
 
@@ -113,19 +114,18 @@ pub fn Tuple(comptime Parsers: anytype) type {
                 if (Parser.parse(allocator, currentInput)) |token| {
                     value[i] = token.value;
                     if (comptime i < Parsers.len - 1)
-                        currentInput = trimWhitespacesStart(token.rest)
+                        currentInput = utils.trimWhitespacesStart(token.rest)
                     else
                         return .{ .value = value, .rest = token.rest };
                 } else {
-                    deparseUntil(allocator, i, value);
+                    Internal.deparseUntil(allocator, i, value);
                     return null;
                 }
             }
         }
 
         pub inline fn deparse(allocator: mem.Allocator, value: Value) void {
-            inline for (Parsers, 0..) |Parser, i|
-                Parser.deparse(allocator, value[i]);
+            Internal.deparseUntil(allocator, Parsers.len, value);
         }
     };
 }
@@ -161,7 +161,7 @@ pub fn Union(comptime Parsers: anytype) type {
             );
         };
 
-        pub inline fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?Parsed(Value) {
+        pub inline fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
             inline for (fields) |field|
                 if (@field(Parsers, field.name).parse(allocator, trimmedInput)) |parsedResult|
                     return .{ .value = @unionInit(Value, field.name, parsedResult.value), .rest = parsedResult.rest };
@@ -170,34 +170,31 @@ pub fn Union(comptime Parsers: anytype) type {
         }
 
         pub inline fn deparse(allocator: mem.Allocator, value: Value) void {
-            inline for (fields) |field| {
-                if (value == @field(Value, field.name)) {
-                    const active_val = @field(value, field.name);
-                    @field(Parsers, field.name).deparse(allocator, active_val);
-                }
-            }
+            inline for (fields) |field|
+                if (value == @field(Value, field.name))
+                    @field(Parsers, field.name).deparse(allocator, @field(value, field.name));
         }
     };
 }
 
+/// Reference parser recursively.
 pub fn Ref(comptime Parser: anytype) type {
     return struct {
         pub const Value = struct {
-          ptr: *anyopaque,
+            ptr: *anyopaque,
 
-          fn unwrap(self: @This()) *Parser.Value {
-            return @ptrCast(@alignCast(self.ptr));
-          }
+            fn cast(self: @This()) *Parser.Value {
+                return @ptrCast(@alignCast(self.ptr));
+            }
         };
 
-        pub fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?Parsed(Value) {
+        pub fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
             if (Parser.parse(allocator, trimmedInput)) |token| {
                 const ptr = allocator.create(Parser.Value) catch {
                     Parser.deparse(allocator, token.value);
                     return null;
                 };
                 ptr.* = token.value;
-
                 return .{ .value = .{ .ptr = ptr }, .rest = token.rest };
             }
 
@@ -205,18 +202,19 @@ pub fn Ref(comptime Parser: anytype) type {
         }
 
         pub fn deparse(allocator: mem.Allocator, value: Value) void {
-            const ptr = value.unwrap();
+            const ptr = value.cast();
             Parser.deparse(allocator, ptr.*);
             allocator.destroy(ptr);
         }
     };
 }
 
+/// Prevent parser inlining.
 pub fn Cache(comptime Parser: anytype) type {
     return struct {
         pub const Value = Parser.Value;
 
-        pub fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?Parsed(Value) {
+        pub fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
             return Parser.parse(allocator, trimmedInput);
         }
 
@@ -226,13 +224,13 @@ pub fn Cache(comptime Parser: anytype) type {
     };
 }
 
-pub fn Recurse(comptime ParserInit: type) type {
+pub fn Recursive(comptime ParserInit: type) type {
     return struct {
         const T = ParserInit.init(@This());
 
         pub const Value = T.Value;
 
-        pub fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?Parsed(Value) {
+        pub fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
             return T.parse(allocator, trimmedInput);
         }
 
@@ -243,7 +241,11 @@ pub fn Recurse(comptime ParserInit: type) type {
 }
 
 pub fn parse(comptime T: anytype, allocator: mem.Allocator, input: []const u8) ?T.Value {
-    return if (T.parse(allocator, trimWhitespacesStart(input))) |parsedResult| parsedResult.value else null;
+    return if (T.parse(allocator, utils.trimWhitespacesStart(input))) |parsedResult| parsedResult.value else null;
+}
+
+pub fn deparse(comptime T: anytype, allocator: mem.Allocator, value: T.Value) void {
+    T.deparse(allocator, value);
 }
 
 //
@@ -253,37 +255,40 @@ const testing = std.testing;
 
 test "Const" {
     const Parser = Const("x");
-    try testing.expect(parse(Parser, testing.allocator, "x") != null);
+
+    const parsed = parse(Parser, testing.failing_allocator, "x").?;
+    _ = parsed;
 }
 
 test "Integers" {
-    try testing.expect(mem.eql(u8, parse(UInt, testing.allocator, " 32 ").?, "32"));
-    try testing.expect(mem.eql(u8, parse(Int, testing.allocator, " -32 ").?, "-32"));
+    try testing.expect(mem.eql(u8, parse(UInt, testing.failing_allocator, " 32 ").?, "32"));
+    try testing.expect(mem.eql(u8, parse(Int, testing.failing_allocator, " -32 ").?, "-32"));
 }
 
 test "Tuple" {
     const Parser = Tuple(.{ Const("x"), Const("y"), Const("z") });
-    try testing.expect(parse(Parser, testing.allocator, " x y z t") != null);
+
+    const parsed = parse(Parser, testing.failing_allocator, " x y z t").?;
+    _ = parsed[0];
+    _ = parsed[1];
+    _ = parsed[2];
 }
 
 test "Union" {
     const Parser = Union(.{ .x = Const("x"), .y = Const("y"), .z = Const("z") });
 
-    const parsed = parse(Parser, testing.allocator, "y t").?;
-    try testing.expect(switch (parsed) {
-        .y => true,
-        else => false,
-    });
+    const parsed = parse(Parser, testing.failing_allocator, "y t").?;
+    _ = parsed.y;
 }
 
 test "Ref" {
-    const Parser = Recurse(struct {
+    const Parser = Recursive(struct {
         fn init(Self: type) type {
             return Union(.{
                 .end = Const("end"),
                 .next = Tuple(.{
                     Union(.{ .x = Const("x"), .y = Const("y") }),
-                    Ref(Self), // hmm
+                    Ref(Self),
                 }),
             });
         }
@@ -292,7 +297,34 @@ test "Ref" {
     const allocator = testing.allocator;
 
     if (parse(Parser, allocator, "  x  end  ")) |val| {
-        defer Parser.deparse(allocator, val);
-        try testing.expect(true);
+        defer deparse(Parser, allocator, val);
+
+        _ = val.next[0];
+        _ = val.next[1].cast().end;
+    } else try testing.expect(false);
+}
+
+test "Module" {
+    const Parser = (struct {
+        const Self = @This();
+
+        pub const Root = Union(.{
+            .end = Const("end"),
+            .next = Tuple(.{
+                Union(.{ .x = Const("x"), .y = Const("y") }),
+                Self.Z,
+            }),
+        });
+
+        pub const Z = Const("z");
+    }).Root;
+
+    const allocator = testing.allocator;
+
+    if (parse(Parser, allocator, "  x  z  ")) |val| {
+        defer deparse(Parser, allocator, val);
+
+        _ = val.next[0];
+        _ = val.next[1];
     } else try testing.expect(false);
 }
