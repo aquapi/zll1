@@ -38,15 +38,13 @@ pub const UnsignedFloat = struct {
     pub const Value = []const u8;
 
     pub fn parse(_: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
-        if (utils.consumeUnsignedDigits(trimmedInput, 0)) |idx| {
-            if (idx == trimmedInput.len)
-                return utils.split(trimmedInput, idx);
-
-            if (trimmedInput[idx] == '.')
-                return utils.splitIfExists(trimmedInput, utils.consumeUnsignedDigits(trimmedInput, idx + 1));
-        }
-
-        return null;
+        return if (utils.consumeUnsignedDigits(trimmedInput, 0)) |idx|
+            if (idx == trimmedInput.len or trimmedInput[idx] != '.')
+                utils.split(trimmedInput, idx)
+            else
+                utils.splitIfExists(trimmedInput, utils.consumeUnsignedDigits(trimmedInput, idx + 1))
+        else
+            null;
     }
 
     pub inline fn deparse(_: mem.Allocator, _: Value) void {}
@@ -56,15 +54,13 @@ pub const Float = struct {
     pub const Value = []const u8;
 
     pub fn parse(_: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
-        if (utils.consumeSignedDigits(trimmedInput, 0)) |idx| {
-            if (idx == trimmedInput.len)
-                return utils.split(trimmedInput, idx);
-
-            if (trimmedInput[idx] == '.')
-                return utils.splitIfExists(trimmedInput, utils.consumeUnsignedDigits(trimmedInput, idx + 1));
-        }
-
-        return null;
+        return if (utils.consumeSignedDigits(trimmedInput, 0)) |idx|
+            if (idx == trimmedInput.len or trimmedInput[idx] != '.')
+                utils.split(trimmedInput, idx)
+            else
+                utils.splitIfExists(trimmedInput, utils.consumeUnsignedDigits(trimmedInput, idx + 1))
+        else
+            null;
     }
 
     pub inline fn deparse(_: mem.Allocator, _: Value) void {}
@@ -102,11 +98,11 @@ pub fn String(comptime quote: u8) type {
 
         pub inline fn parse(_: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
             if (trimmedInput.len > 1 and trimmedInput[0] == quote) {
-                var idx = 1;
-                while (mem.findScalar(u8, trimmedInput[idx..], quote)) |q| {
-                    if (trimmedInput[idx - 1] != '\\')
-                        return .{ .value = trimmedInput[1..idx], .rest = trimmedInput[idx + 1 ..] };
-                    idx = q + 1;
+                var idx: usize = 1;
+                while (mem.findScalarPos(u8, trimmedInput, idx, quote)) |quotePos| {
+                    if (trimmedInput[quotePos - 1] != '\\')
+                        return .{ .value = trimmedInput[1..quotePos], .rest = trimmedInput[quotePos + 1 ..] };
+                    idx = quotePos + 1;
                 }
             }
 
@@ -119,8 +115,8 @@ pub fn String(comptime quote: u8) type {
 
 // Combinators
 pub fn Tuple(comptime Parsers: anytype) type {
-    const Internal = struct {
-        const Value = blk: {
+    return struct {
+        pub const Value = blk: {
             var parser_value_types: [Parsers.len]type = undefined;
 
             for (Parsers, 0..) |Parser, i|
@@ -134,10 +130,6 @@ pub fn Tuple(comptime Parsers: anytype) type {
                 if (i < freeIdx)
                     Parser.deparse(allocator, value[i]);
         }
-    };
-
-    return struct {
-        pub const Value = Internal.Value;
 
         pub inline fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
             var value: Value = undefined;
@@ -151,14 +143,14 @@ pub fn Tuple(comptime Parsers: anytype) type {
                     else
                         return .{ .value = value, .rest = token.rest };
                 } else {
-                    Internal.deparseUntil(allocator, i, value);
+                    deparseUntil(allocator, i, value);
                     return null;
                 }
             }
         }
 
         pub inline fn deparse(allocator: mem.Allocator, value: Value) void {
-            Internal.deparseUntil(allocator, Parsers.len, value);
+            deparseUntil(allocator, Parsers.len, value);
         }
     };
 }
@@ -215,7 +207,10 @@ pub fn Optional(comptime Parser: anytype) type {
         pub const Value = ?Parser.Value;
 
         pub inline fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
-            return if (Parser.parse(allocator, trimmedInput)) |token| token else .{ .value = null, .rest = trimmedInput };
+            return if (Parser.parse(allocator, trimmedInput)) |token|
+                .{ .value = token.value, .rest = token.rest }
+            else
+                .{ .value = null, .rest = trimmedInput };
         }
 
         pub fn deparse(allocator: mem.Allocator, value: Value) void {
@@ -237,14 +232,14 @@ pub fn Array(comptime Parser: anytype) type {
                     @This().deparse(allocator, list);
                     return null;
                 };
-                currentInput = utils.trimWhitespacesStart(currentInput);
-            } else return list;
+                currentInput = utils.trimWhitespacesStart(token.rest);
+            } else return .{ .value = list, .rest = currentInput };
         }
 
         pub fn deparse(allocator: mem.Allocator, value: Value) void {
             for (value.items) |item|
                 Parser.deparse(allocator, item);
-            defer value.deinit(allocator);
+            defer @constCast(&value).deinit(allocator);
         }
     };
 }
@@ -255,7 +250,7 @@ pub fn Ref(comptime Parser: anytype) type {
         pub const Value = struct {
             ptr: *anyopaque,
 
-            fn cast(self: @This()) *Parser.Value {
+            pub fn cast(self: @This()) *Parser.Value {
                 return @ptrCast(@alignCast(self.ptr));
             }
         };
