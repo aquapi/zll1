@@ -80,7 +80,7 @@ pub const Ident = struct {
     pub inline fn deparse(_: mem.Allocator, _: Value) void {}
 };
 
-pub fn Prefix(comptime prefix: []const u8) type {
+pub fn Const(comptime prefix: []const u8) type {
     return struct {
         pub const Value = struct {};
 
@@ -155,6 +155,69 @@ pub fn Tuple(comptime Parsers: anytype) type {
     };
 }
 
+pub fn Prefix(comptime prefix: []const u8, comptime Parser: anytype) type {
+    return struct {
+        pub const Value = Parser.Value;
+
+        pub inline fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
+            return if (mem.startsWith(u8, trimmedInput, prefix))
+                Parser.parse(allocator, utils.trimWhitespacesStart(trimmedInput[prefix.len..]))
+            else
+                null;
+        }
+
+        pub inline fn deparse(allocator: mem.Allocator, value: Value) void {
+            Parser.deparse(allocator, value);
+        }
+    };
+}
+
+pub fn Suffix(comptime Parser: anytype, comptime suffix: []const u8) type {
+    return struct {
+        pub const Value = Parser.Value;
+
+        pub fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
+            if (Parser.parse(allocator, trimmedInput)) |token| {
+                const rest = utils.trimWhitespacesStart(token.rest);
+                if (mem.startsWith(u8, rest, suffix))
+                    return .{ .value = token.value, .rest = rest }
+                else
+                    Parser.deparse(allocator, token.value);
+            }
+
+            return null;
+        }
+
+        pub inline fn deparse(allocator: mem.Allocator, value: Value) void {
+            Parser.deparse(allocator, value);
+        }
+    };
+}
+
+pub fn Wrap(comptime prefix: []const u8, comptime Parser: anytype, comptime suffix: []const u8) type {
+    return struct {
+        pub const Value = Parser.Value;
+
+        pub fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
+            if (mem.startsWith(u8, trimmedInput, prefix)) {
+                if (Parser.parse(allocator, utils.trimWhitespacesStart(trimmedInput[prefix.len..]))) |token| {
+                    const rest = utils.trimWhitespacesStart(token.rest);
+                    if (mem.startsWith(u8, rest, suffix))
+                        return .{ .value = token.value, .rest = rest }
+                    else
+                        Parser.deparse(allocator, token.value);
+                }
+            }
+
+            return null;
+        }
+
+        pub inline fn deparse(allocator: mem.Allocator, value: Value) void {
+            Parser.deparse(allocator, value);
+        }
+    };
+}
+
 pub fn Union(comptime Parsers: anytype) type {
     const fields = std.meta.fields(@TypeOf(Parsers));
 
@@ -219,7 +282,7 @@ pub fn Optional(comptime Parser: anytype) type {
     };
 }
 
-pub fn Array(comptime Parser: anytype) type {
+pub fn Array(comptime Parser: anytype, comptime separator: []const u8) type {
     return struct {
         pub const Value = std.ArrayList(Parser.Value);
 
@@ -232,8 +295,17 @@ pub fn Array(comptime Parser: anytype) type {
                     @This().deparse(allocator, list);
                     return null;
                 };
+
                 currentInput = utils.trimWhitespacesStart(token.rest);
-            } else return .{ .value = list, .rest = currentInput };
+                if (comptime separator.len > 0) {
+                    if (!mem.startsWith(u8, currentInput, separator))
+                        break;
+
+                    currentInput = utils.trimWhitespacesStart(currentInput[separator.len..]);
+                }
+            }
+
+            return .{ .value = list, .rest = currentInput };
         }
 
         pub fn deparse(allocator: mem.Allocator, value: Value) void {
@@ -309,7 +381,7 @@ pub fn deparse(comptime T: anytype, allocator: mem.Allocator, value: T.Value) vo
 const testing = std.testing;
 
 test "Const" {
-    const Parser = Prefix("x");
+    const Parser = Const("x");
 
     const parsed = parse(Parser, testing.failing_allocator, "x").?;
     _ = parsed;
@@ -321,7 +393,7 @@ test "Integers" {
 }
 
 test "Tuple" {
-    const Parser = Tuple(.{ Prefix("x"), Prefix("y"), Prefix("z") });
+    const Parser = Tuple(.{ Const("x"), Const("y"), Const("z") });
 
     const parsed = parse(Parser, testing.failing_allocator, " x y z t").?;
     _ = parsed[0];
@@ -330,7 +402,7 @@ test "Tuple" {
 }
 
 test "Union" {
-    const Parser = Union(.{ .x = Prefix("x"), .y = Prefix("y"), .z = Prefix("z") });
+    const Parser = Union(.{ .x = Const("x"), .y = Const("y"), .z = Const("z") });
 
     const parsed = parse(Parser, testing.failing_allocator, "y t").?;
     _ = parsed.y;
@@ -340,9 +412,9 @@ test "Ref" {
     const Parser = Recursive(struct {
         fn init(Self: type) type {
             return Union(.{
-                .end = Prefix("end"),
+                .end = Const("end"),
                 .next = Tuple(.{
-                    Union(.{ .x = Prefix("x"), .y = Prefix("y") }),
+                    Union(.{ .x = Const("x"), .y = Const("y") }),
                     Ref(Self),
                 }),
             });
@@ -364,14 +436,14 @@ test "Module" {
         const Self = @This();
 
         pub const Root = Union(.{
-            .end = Prefix("end"),
+            .end = Const("end"),
             .next = Tuple(.{
-                Union(.{ .x = Prefix("x"), .y = Prefix("y") }),
+                Union(.{ .x = Const("x"), .y = Const("y") }),
                 Self.Z,
             }),
         });
 
-        pub const Z = Prefix("z");
+        pub const Z = Const("z");
     }).Root;
 
     const allocator = testing.allocator;

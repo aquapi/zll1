@@ -1,22 +1,22 @@
 const std = @import("std");
 const parser = @import("zll1").parser;
 
-const grammar = @import("./grammar.zig");
+const JSON = @import("./grammar.zig");
 
 pub fn main(init: std.process.Init) void {
     const arena = init.arena.allocator();
 
     {
-        const example_json = parser.parse(grammar.JSON, arena,
+        const example_json = parser.parse(JSON.Value, arena,
             \\{
             \\  "hello": "world",
             \\  "id": 0
             \\}
         ).?;
-        defer parser.deparse(grammar.JSON, arena, example_json);
+        defer parser.deparse(JSON.Value, arena, example_json);
 
-        const props = example_json.object[1].?;
-        _ = props[0][2].cast().string;
-        _ = props[1].items[0][1][2].cast().number;
+        const props = example_json.object;
+        _ = props.items[0][1].cast().string;
+        _ = props.items[1][1].cast().number;
     }
 }
