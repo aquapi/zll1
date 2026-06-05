@@ -17,7 +17,7 @@ pub const Noop = struct {
 pub const UnsignedInt = struct {
     pub const Value = []const u8;
 
-    pub fn parse(_: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
+    pub inline fn parse(_: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
         return utils.splitIfExists(trimmedInput, utils.consumeUnsignedDigits(trimmedInput, 0));
     }
 
@@ -27,7 +27,7 @@ pub const UnsignedInt = struct {
 pub const Int = struct {
     pub const Value = []const u8;
 
-    pub fn parse(_: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
+    pub inline fn parse(_: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
         return utils.splitIfExists(trimmedInput, utils.consumeSignedDigits(trimmedInput, 0));
     }
 
@@ -96,7 +96,7 @@ pub fn String(comptime quote: u8) type {
     return struct {
         pub const Value = []const u8;
 
-        pub inline fn parse(_: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
+        pub fn parse(_: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
             if (trimmedInput.len > 1 and trimmedInput[0] == quote) {
                 var idx: usize = 1;
                 while (mem.findScalarPos(u8, trimmedInput, idx, quote)) |quotePos| {
@@ -131,7 +131,7 @@ pub fn Tuple(comptime Parsers: anytype) type {
                     Parser.deparse(allocator, value[i]);
         }
 
-        pub inline fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
+        pub fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
             var value: Value = undefined;
             var currentInput = trimmedInput;
 
@@ -186,7 +186,7 @@ pub fn Union(comptime Parsers: anytype) type {
             );
         };
 
-        pub inline fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
+        pub fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
             inline for (fields) |field|
                 if (@field(Parsers, field.name).parse(allocator, trimmedInput)) |parsedResult|
                     return .{ .value = @unionInit(Value, field.name, parsedResult.value), .rest = parsedResult.rest };
@@ -194,7 +194,7 @@ pub fn Union(comptime Parsers: anytype) type {
             return null;
         }
 
-        pub inline fn deparse(allocator: mem.Allocator, value: Value) void {
+        pub fn deparse(allocator: mem.Allocator, value: Value) void {
             inline for (fields) |field|
                 if (value == @field(Value, field.name))
                     @field(Parsers, field.name).deparse(allocator, @field(value, field.name));
@@ -213,7 +213,7 @@ pub fn Optional(comptime Parser: anytype) type {
                 .{ .value = null, .rest = trimmedInput };
         }
 
-        pub fn deparse(allocator: mem.Allocator, value: Value) void {
+        pub inline fn deparse(allocator: mem.Allocator, value: Value) void {
             if (value) |val| Parser.deparse(allocator, val);
         }
     };
@@ -223,7 +223,7 @@ pub fn Array(comptime Parser: anytype) type {
     return struct {
         pub const Value = std.ArrayList(Parser.Value);
 
-        pub inline fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
+        pub fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
             var list: Value = .empty;
             var currentInput = trimmedInput;
 
@@ -250,7 +250,7 @@ pub fn Ref(comptime Parser: anytype) type {
         pub const Value = struct {
             ptr: *anyopaque,
 
-            pub fn cast(self: @This()) *Parser.Value {
+            pub inline fn cast(self: @This()) *Parser.Value {
                 return @ptrCast(@alignCast(self.ptr));
             }
         };
@@ -276,24 +276,12 @@ pub fn Ref(comptime Parser: anytype) type {
     };
 }
 
-/// Prevent parser inlining.
-pub fn Cache(comptime Parser: anytype) type {
-    return struct {
-        pub const Value = Parser.Value;
-
-        pub fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
-            return Parser.parse(allocator, trimmedInput);
-        }
-
-        pub fn deparse(allocator: mem.Allocator, value: Value) void {
-            Parser.deparse(allocator, value);
-        }
-    };
-}
-
 pub fn Recursive(comptime ParserInit: type) type {
     return struct {
-        const T = ParserInit.init(@This());
+        const T = blk: {
+            const info = @typeInfo(@TypeOf(ParserInit.init)).@"fn";
+            break :blk if (info.params.len == 0) ParserInit.init() else ParserInit.init(@This());
+        };
 
         pub const Value = T.Value;
 
