@@ -53,12 +53,20 @@ pub fn splitIfExists(trimmedInput: []const u8, idx: ?usize) ?ParsedResult([]cons
 }
 
 pub fn trimWhitespacesStart(input: []const u8) []const u8 {
-    return mem.trimStart(u8, input, " \n\r\t");
+    return input[consumeChars(input, 0, " \n\r\t")..];
 }
 
-pub fn consumeChars(trimmedInput: []const u8, start: usize, charset: []const u8) usize {
+pub fn consumeChars(trimmedInput: []const u8, start: usize, comptime charset: []const u8) usize {
     var begin = start;
-    while (begin < charset.len and mem.findScalar(u8, charset, trimmedInput[begin]) != null) : (begin += 1) {}
+    blk: while (begin < charset.len) {
+      inline for (charset) |c|
+        if (trimmedInput[begin] == c) {
+          begin += 1;
+          continue :blk;
+        };
+
+      break;
+    }
     return begin;
 }
 
