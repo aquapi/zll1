@@ -46,7 +46,7 @@ pub fn build(b: *std.Build) !void {
                 .root_source_file = b.path(path),
                 .target = target,
                 .optimize = optimize,
-                .strip = true
+                .strip = true,
             }),
         });
         exe.root_module.addImport("zll1", zll1);

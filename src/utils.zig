@@ -24,6 +24,30 @@ pub fn split(trimmedInput: []const u8, idx: usize) ParsedResult([]const u8) {
     return .{ .value = trimmedInput[0..idx], .rest = trimmedInput[idx..] };
 }
 
+/// startsWith with fast paths for small cases
+pub fn startsWith(trimmedInput: []const u8, comptime prefix: []const u8) bool {
+    const prefixLen = prefix.len;
+
+    if (comptime prefixLen > 16)
+        return mem.startsWith(u8, trimmedInput, prefix);
+
+    if (trimmedInput.len < prefixLen) return false;
+
+    if (comptime prefixLen >= 4) {
+        var x: u32 = 0;
+        inline for ([_]usize{ 0, prefixLen - 4, (prefixLen / 8) * 4, prefixLen - 4 - ((prefixLen / 8) * 4) }) |n| {
+            x |= @as(u32, @bitCast(prefix[n..][0..4].*)) ^ @as(u32, @bitCast(trimmedInput[n..][0..4].*));
+        }
+        return x == 0;
+    }
+
+    if (comptime prefixLen == 1)
+        return trimmedInput[0] == prefix[0];
+
+    const x = (prefix[0] ^ trimmedInput[0]) | (prefix[prefixLen - 1] ^ trimmedInput[prefixLen - 1]) | (prefix[prefixLen / 2] ^ trimmedInput[prefixLen / 2]);
+    return x == 0;
+}
+
 pub fn splitIfExists(trimmedInput: []const u8, idx: ?usize) ?ParsedResult([]const u8) {
     return if (idx) |i| split(trimmedInput, i) else null;
 }

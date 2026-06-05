@@ -9,7 +9,5 @@ pub const Value = p.Recursive(struct {
 pub const Number = p.Float;
 pub const String = p.String('"');
 
-const Pair = p.Tuple(.{ String, p.Prefix(":", p.Ref(Value)) });
-pub const Object = p.Wrap("{", p.Array(Pair, ","), "}");
-
+pub const Object = p.Wrap("{", p.Array(p.Tuple(.{ String, p.Prefix(":", p.Ref(Value)) }), ","), "}");
 pub const Array = p.Wrap("[", p.Array(p.Ref(Value), ","), "]");

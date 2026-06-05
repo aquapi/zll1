@@ -85,7 +85,7 @@ pub fn Const(comptime prefix: []const u8) type {
         pub const Value = struct {};
 
         pub inline fn parse(_: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
-            return if (mem.startsWith(u8, trimmedInput, prefix)) .{ .value = .{}, .rest = trimmedInput[prefix.len..] } else null;
+            return if (utils.startsWith(trimmedInput, prefix)) .{ .value = .{}, .rest = trimmedInput[prefix.len..] } else null;
         }
 
         pub inline fn deparse(_: mem.Allocator, _: Value) void {}
@@ -160,7 +160,7 @@ pub fn Prefix(comptime prefix: []const u8, comptime Parser: anytype) type {
         pub const Value = Parser.Value;
 
         pub inline fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
-            return if (mem.startsWith(u8, trimmedInput, prefix))
+            return if (utils.startsWith(trimmedInput, prefix))
                 Parser.parse(allocator, utils.trimWhitespacesStart(trimmedInput[prefix.len..]))
             else
                 null;
@@ -179,7 +179,7 @@ pub fn Suffix(comptime Parser: anytype, comptime suffix: []const u8) type {
         pub fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
             if (Parser.parse(allocator, trimmedInput)) |token| {
                 const rest = utils.trimWhitespacesStart(token.rest);
-                if (mem.startsWith(u8, rest, suffix))
+                if (utils.startsWith(rest, suffix))
                     return .{ .value = token.value, .rest = rest }
                 else
                     Parser.deparse(allocator, token.value);
@@ -199,10 +199,10 @@ pub fn Wrap(comptime prefix: []const u8, comptime Parser: anytype, comptime suff
         pub const Value = Parser.Value;
 
         pub fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
-            if (mem.startsWith(u8, trimmedInput, prefix)) {
+            if (utils.startsWith(trimmedInput, prefix)) {
                 if (Parser.parse(allocator, utils.trimWhitespacesStart(trimmedInput[prefix.len..]))) |token| {
                     const rest = utils.trimWhitespacesStart(token.rest);
-                    if (mem.startsWith(u8, rest, suffix))
+                    if (utils.startsWith(rest, suffix))
                         return .{ .value = token.value, .rest = rest }
                     else
                         Parser.deparse(allocator, token.value);
@@ -298,7 +298,7 @@ pub fn Array(comptime Parser: anytype, comptime separator: []const u8) type {
 
                 currentInput = utils.trimWhitespacesStart(token.rest);
                 if (comptime separator.len > 0) {
-                    if (!mem.startsWith(u8, currentInput, separator))
+                    if (!utils.startsWith(currentInput, separator))
                         break;
 
                     currentInput = utils.trimWhitespacesStart(currentInput[separator.len..]);

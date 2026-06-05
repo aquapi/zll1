@@ -24,3 +24,12 @@ exe.root_module.addImport("zll1", zuws.module("zll1"));
 ```
 
 See [./examples](./examples) for usages.
+
+To build examples:
+```sh
+# build json example
+zig build example -- json
+
+# build json example to asm
+zig build example-asm -- json
+```
