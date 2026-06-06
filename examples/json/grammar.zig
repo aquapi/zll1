@@ -8,7 +8,7 @@ const utils = zll1.utils;
 // Mark as recursive to avoid type errors while using Ref(Value)
 pub const Value = p.Recursive(struct {
     pub fn init() type {
-        return p.Union(.{ .number = Number, .string = String, .nil = p.Const("null"), .true = p.Const("true"), .false = p.Const("false"), .object = Object, .array = Array });
+        return p.Union(.{ .nil = p.Const("null"), .true = p.Const("true"), .false = p.Const("false"), .number = Number, .string = String, .object = Object, .array = Array });
     }
 });
 
