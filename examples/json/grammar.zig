@@ -108,7 +108,7 @@ pub const String = struct {
                         // Known escape character
                         '"', '\\', '/', 'b', 'f', 'n', 'r', 't' => begin += 2,
 
-                        // Escape hex
+                        // Hex
                         'u' => {
                             // 2,3,4,5 are hex
                             if (trimmedInput.len < begin + 6) return null;
@@ -122,9 +122,14 @@ pub const String = struct {
                             begin += 6;
                         },
 
+                        // Invalid escape
                         else => return null
                     }
                 },
+
+                // Not allowed characters
+                0...31 => return null,
+
                 else => begin += 1,
             }
         }
