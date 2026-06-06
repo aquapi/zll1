@@ -13,59 +13,6 @@ pub const Noop = struct {
     pub inline fn deparse(_: mem.Allocator, _: Value) void {}
 };
 
-// Built-in parsers
-pub const UnsignedInt = struct {
-    pub const Value = []const u8;
-
-    pub inline fn parse(_: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
-        return utils.splitIfExists(trimmedInput, utils.consumeUnsignedDigits(trimmedInput, 0));
-    }
-
-    pub inline fn deparse(_: mem.Allocator, _: Value) void {}
-};
-
-pub const Int = struct {
-    pub const Value = []const u8;
-
-    pub inline fn parse(_: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
-        return utils.splitIfExists(trimmedInput, utils.consumeSignedDigits(trimmedInput, 0));
-    }
-
-    pub inline fn deparse(_: mem.Allocator, _: Value) void {}
-};
-
-pub const UnsignedFloat = struct {
-    pub const Value = []const u8;
-
-    pub fn parse(_: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
-        return if (utils.consumeUnsignedDigits(trimmedInput, 0)) |idx|
-            if (idx == trimmedInput.len or trimmedInput[idx] != '.')
-                utils.split(trimmedInput, idx)
-            else
-                utils.splitIfExists(trimmedInput, utils.consumeUnsignedDigits(trimmedInput, idx + 1))
-        else
-            null;
-    }
-
-    pub inline fn deparse(_: mem.Allocator, _: Value) void {}
-};
-
-pub const Float = struct {
-    pub const Value = []const u8;
-
-    pub fn parse(_: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
-        return if (utils.consumeSignedDigits(trimmedInput, 0)) |idx|
-            if (idx == trimmedInput.len or trimmedInput[idx] != '.')
-                utils.split(trimmedInput, idx)
-            else
-                utils.splitIfExists(trimmedInput, utils.consumeUnsignedDigits(trimmedInput, idx + 1))
-        else
-            null;
-    }
-
-    pub inline fn deparse(_: mem.Allocator, _: Value) void {}
-};
-
 /// Identifier parser.
 pub const Ident = struct {
     pub const Value = []const u8;
@@ -86,27 +33,6 @@ pub fn Const(comptime prefix: []const u8) type {
 
         pub inline fn parse(_: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
             return if (utils.startsWith(trimmedInput, prefix)) .{ .value = .{}, .rest = trimmedInput[prefix.len..] } else null;
-        }
-
-        pub inline fn deparse(_: mem.Allocator, _: Value) void {}
-    };
-}
-
-pub fn String(comptime quote: u8) type {
-    return struct {
-        pub const Value = []const u8;
-
-        pub fn parse(_: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
-            if (trimmedInput.len > 1 and trimmedInput[0] == quote) {
-                var idx: usize = 1;
-                while (mem.findScalarPos(u8, trimmedInput, idx, quote)) |quotePos| {
-                    if (trimmedInput[quotePos - 1] != '\\')
-                        return .{ .value = trimmedInput[1..quotePos], .rest = trimmedInput[quotePos + 1 ..] };
-                    idx = quotePos + 1;
-                }
-            }
-
-            return null;
         }
 
         pub inline fn deparse(_: mem.Allocator, _: Value) void {}
@@ -385,11 +311,6 @@ test "Const" {
 
     const parsed = parse(Parser, testing.failing_allocator, "x").?;
     _ = parsed;
-}
-
-test "Integers" {
-    try testing.expect(mem.eql(u8, parse(UnsignedInt, testing.failing_allocator, " 32 ").?, "32"));
-    try testing.expect(mem.eql(u8, parse(Int, testing.failing_allocator, " -32 ").?, "-32"));
 }
 
 test "Tuple" {

@@ -14,7 +14,8 @@ pub fn charRange(comptime start: u8, comptime end: u8) [end - start + 1]u8 {
 }
 
 pub const DIGITS = &charRange('0', '9');
-pub const IDENT = &charRange('a', 'z') + &charRange('A', 'Z') + "_$" + DIGITS;
+pub const HEX = &charRange('a', 'z') ++ &charRange('A', 'Z') ++ DIGITS;
+pub const IDENT = HEX ++ "_$";
 
 pub fn ParsedResult(comptime T: anytype) type {
     return struct { value: T, rest: []const u8 };
@@ -68,30 +69,4 @@ pub fn consumeChars(trimmedInput: []const u8, start: usize, comptime charset: []
         break;
     }
     return begin;
-}
-
-pub fn consumeUnsignedDigits(trimmedInput: []const u8, start: usize) ?usize {
-    return if (trimmedInput.len == start) null else switch (trimmedInput[start]) {
-        '0' => @as(usize, 1),
-        '1'...'9' => consumeChars(trimmedInput, start + 1, DIGITS),
-        else => null,
-    };
-}
-
-pub fn consumeSignedDigits(trimmedInput: []const u8, start: usize) ?usize {
-    return if (trimmedInput.len < start + 2)
-        if (trimmedInput.len == start + 1) switch (trimmedInput[start]) {
-            '0'...'9' => @as(usize, start + 1),
-            else => null,
-        } else null
-    else switch (trimmedInput[start]) {
-        '0' => @as(usize, start + 1),
-        '1'...'9' => consumeChars(trimmedInput, start + 1, DIGITS),
-        '-' => switch (trimmedInput[start + 1]) {
-            '0' => @as(usize, start + 2),
-            '1'...'9' => consumeChars(trimmedInput, start + 2, DIGITS),
-            else => null,
-        },
-        else => null,
-    };
 }

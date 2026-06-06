@@ -42,7 +42,12 @@ pub fn build(b: *std.Build) !void {
         const exe = b.addExecutable(.{
             .name = example_name,
             .use_llvm = true,
-            .root_module = b.createModule(.{ .root_source_file = b.path(path), .target = target, .optimize = optimize, .strip = true }),
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(path),
+                .target = target,
+                .optimize = optimize,
+                .strip = true,
+            }),
         });
         exe.root_module.addImport("zll1", zll1);
         b.installArtifact(exe);
