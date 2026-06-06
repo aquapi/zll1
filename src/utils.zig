@@ -48,24 +48,24 @@ pub fn startsWith(trimmedInput: []const u8, comptime prefix: []const u8) bool {
     return x == 0;
 }
 
-pub fn splitIfExists(trimmedInput: []const u8, idx: ?usize) ?ParsedResult([]const u8) {
+pub inline fn splitIfExists(trimmedInput: []const u8, idx: ?usize) ?ParsedResult([]const u8) {
     return if (idx) |i| split(trimmedInput, i) else null;
 }
 
-pub fn trimWhitespacesStart(input: []const u8) []const u8 {
+pub inline fn trimWhitespacesStart(input: []const u8) []const u8 {
     return input[consumeChars(input, 0, " \n\r\t")..];
 }
 
 pub fn consumeChars(trimmedInput: []const u8, start: usize, comptime charset: []const u8) usize {
     var begin = start;
     blk: while (begin < charset.len) {
-      inline for (charset) |c|
-        if (trimmedInput[begin] == c) {
-          begin += 1;
-          continue :blk;
-        };
+        inline for (charset) |c|
+            if (trimmedInput[begin] == c) {
+                begin += 1;
+                continue :blk;
+            };
 
-      break;
+        break;
     }
     return begin;
 }
