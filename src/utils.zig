@@ -49,6 +49,19 @@ pub fn startsWith(trimmedInput: []const u8, comptime prefix: []const u8) bool {
     return x == 0;
 }
 
+pub inline fn findPos(haystack: []const u8, start: usize, comptime needle: []const u8) ?usize {
+    if (comptime needle.len == 0) return start;
+    if (needle.len > haystack.len) return null;
+
+    if (comptime needle.len < 2)
+        return mem.findScalarPos(u8, haystack, start, needle[0]);
+
+    if (haystack.len < 52 or needle.len <= 4)
+        return mem.findPosLinear(u8, haystack, start, needle);
+
+    return mem.findPos(u8, haystack, start, needle);
+}
+
 pub inline fn splitIfExists(trimmedInput: []const u8, idx: ?usize) ?ParsedResult([]const u8) {
     return if (idx) |i| split(trimmedInput, i) else null;
 }

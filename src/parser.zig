@@ -39,45 +39,22 @@ pub fn Const(comptime prefix: []const u8) type {
     };
 }
 
-// Combinators
-pub fn Tuple(comptime Parsers: anytype) type {
+pub fn Comment(comptime prefix: []const u8, comptime suffix: []const u8) type {
     return struct {
-        pub const Value = blk: {
-            var parser_value_types: [Parsers.len]type = undefined;
+        pub const Value = struct {};
 
-            for (Parsers, 0..) |Parser, i|
-                parser_value_types[i] = Parser.Value;
-
-            break :blk @Tuple(&parser_value_types);
-        };
-
-        fn deparseUntil(allocator: mem.Allocator, freeIdx: usize, value: Value) void {
-            inline for (Parsers, 0..) |Parser, i|
-                if (i < freeIdx)
-                    Parser.deparse(allocator, value[i]);
-        }
-
-        pub fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
-            var value: Value = undefined;
-            var currentInput = trimmedInput;
-
-            inline for (Parsers, 0..) |Parser, i| {
-                if (Parser.parse(allocator, currentInput)) |token| {
-                    value[i] = token.value;
-                    if (comptime i < Parsers.len - 1)
-                        currentInput = utils.trimWhitespacesStart(token.rest)
-                    else
-                        return .{ .value = value, .rest = token.rest };
-                } else {
-                    deparseUntil(allocator, i, value);
-                    return null;
-                }
+        pub fn parse(_: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
+            if (utils.startsWith(trimmedInput, prefix)) {
+                return if (utils.findPos(u8, trimmedInput, prefix.len, suffix)) |pos|
+                    .{ .value = .{}, .rest = trimmedInput[pos + suffix.len] }
+                else
+                    .{ .value = .{}, .rest = trimmedInput[trimmedInput.len..] };
             }
+
+            return .{ .value = .{}, .rest = trimmedInput };
         }
 
-        pub inline fn deparse(allocator: mem.Allocator, value: Value) void {
-            deparseUntil(allocator, Parsers.len, value);
-        }
+        pub inline fn deparse(_: mem.Allocator, _: Value) void {}
     };
 }
 
@@ -140,6 +117,57 @@ pub fn Wrap(comptime prefix: []const u8, comptime Parser: anytype, comptime suff
 
         pub inline fn deparse(allocator: mem.Allocator, value: Value) void {
             Parser.deparse(allocator, value);
+        }
+    };
+}
+
+// Combinators
+pub fn Tuple(comptime Parsers: anytype) type {
+    const fields = std.meta.fields(@TypeOf(Parsers));
+
+    return struct {
+        pub const Value = blk: {
+            var names: [fields.len][]const u8 = undefined;
+            var parser_value_types: [fields.len]type = undefined;
+            var attrs: [fields.len]std.builtin.Type.StructField.Attributes = undefined;
+            var values: [fields.len]u8 = undefined;
+
+            for (fields, 0..) |field, i| {
+                names[i] = field.name;
+                parser_value_types[i] = @field(Parsers, field.name).Value;
+                attrs[i] = .{};
+                values[i] = i;
+            }
+
+            break :blk @Struct(.auto, null, &names, &parser_value_types, &attrs);
+        };
+
+        fn deparseUntil(allocator: mem.Allocator, freeIdx: usize, value: Value) void {
+            inline for (fields, 0..) |field, i|
+                if (i < freeIdx)
+                    @field(Parsers, field.name).deparse(allocator, @field(value, field.name));
+        }
+
+        pub fn parse(allocator: mem.Allocator, trimmedInput: []const u8) ?utils.ParsedResult(Value) {
+            var value: Value = undefined;
+            var currentInput = trimmedInput;
+
+            inline for (fields, 0..) |field, i| {
+                if (@field(Parsers, field.name).parse(allocator, currentInput)) |token| {
+                    @field(value, field.name) = token.value;
+                    if (comptime i < fields.len - 1)
+                        currentInput = utils.trimWhitespacesStart(token.rest)
+                    else
+                        return .{ .value = value, .rest = token.rest };
+                } else {
+                    deparseUntil(allocator, i, value);
+                    return null;
+                }
+            }
+        }
+
+        pub inline fn deparse(allocator: mem.Allocator, value: Value) void {
+            deparseUntil(allocator, fields.len, value);
         }
     };
 }
@@ -314,12 +342,12 @@ test "Const" {
 }
 
 test "Tuple" {
-    const Parser = Tuple(.{ Const("x"), Const("y"), Const("z") });
+    const Parser = Tuple(.{ .x = Const("x"), .y = Const("y"), .z = Const("z") });
 
     const parsed = parse(Parser, testing.failing_allocator, " x y z t").?;
-    _ = parsed[0];
-    _ = parsed[1];
-    _ = parsed[2];
+    _ = parsed.x;
+    _ = parsed.y;
+    _ = parsed.z;
 }
 
 test "Union" {
@@ -335,8 +363,8 @@ test "Ref" {
             return Union(.{
                 .end = Const("end"),
                 .next = Tuple(.{
-                    Union(.{ .x = Const("x"), .y = Const("y") }),
-                    Ref(Self),
+                    .prefix = Union(.{ .x = Const("x"), .y = Const("y") }),
+                    .ref = Ref(Self),
                 }),
             });
         }
@@ -347,8 +375,8 @@ test "Ref" {
     if (parse(Parser, allocator, "  x  end  ")) |val| {
         defer deparse(Parser, allocator, val);
 
-        _ = val.next[0];
-        _ = val.next[1].cast().end;
+        _ = val.next.prefix;
+        _ = val.next.ref.cast().end;
     } else try testing.expect(false);
 }
 
@@ -359,8 +387,8 @@ test "Module" {
         pub const Root = Union(.{
             .end = Const("end"),
             .next = Tuple(.{
-                Union(.{ .x = Const("x"), .y = Const("y") }),
-                Self.Z,
+                .prefix = Union(.{ .x = Const("x"), .y = Const("y") }),
+                .z = Self.Z,
             }),
         });
 
@@ -372,7 +400,7 @@ test "Module" {
     if (parse(Parser, allocator, "  x  z  ")) |val| {
         defer deparse(Parser, allocator, val);
 
-        _ = val.next[0];
-        _ = val.next[1];
+        _ = val.next.prefix;
+        _ = val.next.z;
     } else try testing.expect(false);
 }

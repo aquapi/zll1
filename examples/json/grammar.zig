@@ -8,7 +8,7 @@ const utils = zll1.utils;
 // Mark as recursive to avoid type errors while using Ref(Value)
 pub const Value = p.Recursive(struct {
     pub fn init() type {
-        return p.Union(.{ .nil = p.Const("null"), .true = p.Const("true"), .false = p.Const("false"), .number = Number, .string = String, .object = Object, .array = Array });
+        return p.Union(.{ .nil = p.Const("null"), .true = p.Const("true"), .false = p.Const("false"), .number = Number, .string = String, .object = p.Ref(Object), .array = p.Ref(Array) });
     }
 });
 
@@ -123,7 +123,7 @@ pub const String = struct {
                         },
 
                         // Invalid escape
-                        else => return null
+                        else => return null,
                     }
                 },
 
@@ -140,5 +140,5 @@ pub const String = struct {
     pub inline fn deparse(_: mem.Allocator, _: []const u8) void {}
 };
 
-pub const Object = p.Wrap("{", p.Array(p.Tuple(.{ String, p.Prefix(":", p.Ref(Value)) }), ","), "}");
-pub const Array = p.Wrap("[", p.Array(p.Ref(Value), ","), "]");
+pub const Object = p.Wrap("{", p.Array(p.Tuple(.{ .name = String, .value = p.Prefix(":", Value) }), ","), "}");
+pub const Array = p.Wrap("[", p.Array(Value, ","), "]");

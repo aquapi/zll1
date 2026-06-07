@@ -1,7 +1,7 @@
 const std = @import("std");
 const parser = @import("zll1").parser;
 
-const JSON = @import("./grammar.zig");
+const json = @import("./grammar.zig");
 
 pub fn main() void {
     var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
@@ -9,16 +9,16 @@ pub fn main() void {
     const allocator = arena.allocator();
 
     {
-        const example_json = parser.parse(JSON.Value, allocator,
+        const example_json = parser.parse(json.Value, allocator,
             \\{
             \\  "hello": "world",
             \\  "id": 0
             \\}
         ).?;
-        defer parser.deparse(JSON.Value, allocator, example_json);
+        defer parser.deparse(json.Value, allocator, example_json);
 
-        const props = example_json.object;
-        _ = props.items[0][1].cast().string;
-        _ = props.items[1][1].cast().number;
+        const props = example_json.object.cast();
+        _ = props.items[0].value.string;
+        _ = props.items[1].value.number;
     }
 }
