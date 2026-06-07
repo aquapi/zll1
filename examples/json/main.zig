@@ -15,7 +15,6 @@ pub fn main() void {
             \\  "id": 0
             \\}
         ).?;
-        defer parser.deparse(json.Value, allocator, example_json);
 
         const props = example_json.object.cast();
         _ = props.items[0].value.string;
