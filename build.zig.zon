@@ -1,6 +1,6 @@
 .{
     .name = .zll1,
-    .version = "0.0.1",
+    .version = "0.1.0",
     .minimum_zig_version = "0.16.0",
     .paths = .{ "build.zig", "build.zig.zon", "src" },
     .fingerprint = 0xfc9d893173e73462,
