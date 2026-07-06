@@ -21,16 +21,25 @@ pub fn ParsedResult(comptime Value: type, comptime Err: type) type {
     };
 }
 
-pub const ModuleOptions = struct { context: type = struct { allocator: mem.Allocator }, whitespaces: []const u8 = " \n\r\t" };
+pub const BuilderOptions = struct {
+    /// Shared values used by parsers
+    ctx: type = struct { allocator: mem.Allocator },
 
-pub fn module(comptime options: ModuleOptions) type {
+    /// Whitespaces characters
+    whitespaces: []const u8 = " \n\r\t",
+};
+
+pub fn builder(comptime options: BuilderOptions) type {
     return struct {
-        pub const Context = options.context;
+        pub const Context = options.ctx;
 
         pub fn trimStart(input: []const u8) []const u8 {
             return input[utils.consumeChars(input, 0, options.whitespaces)..];
         }
 
+        /// Match a literal
+        ///
+        /// Literal **MUST NOT** begins or ends with any specified whitespaces character
         pub fn literal(comptime str: []const u8) type {
             return struct {
                 pub const Value = struct {};
@@ -45,6 +54,30 @@ pub fn module(comptime options: ModuleOptions) type {
             };
         }
 
+        /// Comments
+        pub fn comment(comptime prefix: []const u8, comptime suffix: []const u8) type {
+            return struct {
+                pub const Value = []const u8;
+                pub const Err = noreturn;
+
+                pub fn parse(input: []const u8, _: Context) ParsedResult(Value, Err) {
+                    return if (utils.startsWith(input, prefix)) (
+                        // Find comment end
+                        if (utils.findPos(input, prefix.len, suffix)) |end|
+                            .{ .data = .{ .value = input[prefix.len..end] }, .rest = input[end + suffix.len ..] }
+                        else
+                            // Empty end slice
+                            .{ .data = .{ .value = input[prefix.len..] }, .rest = input[input.len..] })
+                    // Empty slice
+                    else .{ .data = .{ .value = input[0..0] }, .rest = input };
+                }
+
+                pub inline fn deparseValue(_: *Value, _: Context) void {}
+                pub inline fn deparseErr(_: *Err, _: Context) void {}
+            };
+        }
+
+        /// Collect error and continue parsing instead of returning
         pub fn either(comptime parser: type) type {
             return struct {
                 pub const Value = ParserData(parser);
@@ -76,7 +109,6 @@ pub fn module(comptime options: ModuleOptions) type {
 
                 pub fn parse(input: []const u8, c: Context) ParsedResult(Value, Err) {
                     var parsed = parser.parse(input, c);
-
                     switch (parsed.data) {
                         .value => |v| return .{ .data = .{ .value = v }, .rest = parsed.rest },
                         .err => |*e| {
@@ -375,7 +407,7 @@ pub fn module(comptime options: ModuleOptions) type {
                     c.allocator.destroy(ptr);
                 }
 
-                pub inline fn deparseErr(err: *Err, c: Context) void {
+                pub fn deparseErr(err: *Err, c: Context) void {
                     var ptr = err.* catch return;
                     parser.deparseErr(&ptr, c);
                 }
@@ -411,10 +443,10 @@ pub fn module(comptime options: ModuleOptions) type {
 
 const testing = std.testing;
 test "basic" {
-    const mod = module(.{ .context = struct {} });
+    const b = builder(.{ .ctx = struct {} });
 
-    const parser = mod.tuple(.{ .prefix = mod.any(.{ .a = mod.literal("a"), .b = mod.literal("b") }), .suffix = mod.either(mod.literal("c")) });
-    const c: mod.Context = .{};
+    const parser = b.tuple(.{ .prefix = b.any(.{ .a = b.literal("a"), .b = b.literal("b") }), .suffix = b.either(b.literal("c")) });
+    const c: b.Context = .{};
 
     {
         var parsed = parser.parse("ac", c).data;
@@ -430,15 +462,15 @@ test "basic" {
 }
 
 test "recursive" {
-    const mod = module(.{});
+    const b = builder(.{});
 
-    const parser = mod.recurse(struct {
+    const parser = b.recurse(struct {
         pub fn init(self: type) type {
-            return mod.tuple(.{ .char = mod.any(.{ .a = mod.literal("a"), .b = mod.literal("b") }), .next = mod.optional(mod.ref(self)) });
+            return b.tuple(.{ .char = b.any(.{ .a = b.literal("a"), .b = b.literal("b") }), .next = b.optional(b.ref(self)) });
         }
     });
 
-    const c: mod.Context = .{ .allocator = testing.allocator };
+    const c: b.Context = .{ .allocator = testing.allocator };
     {
         var parsed = parser.parse("aabb", c).data;
         try testing.expect(parsed == .value);
@@ -453,20 +485,34 @@ test "recursive" {
 }
 
 test "list" {
-    const mod = module(.{});
+    const b = builder(.{});
+    const c: b.Context = .{ .allocator = testing.allocator };
 
-    const parser = mod.separated_list(mod.any(.{ .a = mod.literal("a"), .b = mod.literal("b") }), mod.literal(","));
-
-    const c: mod.Context = .{ .allocator = testing.allocator };
+    // List
     {
-        var parsed = parser.parse("a,b,a", c).data;
-        try testing.expect(parsed == .value);
-        defer parser.deparseValue(&parsed.value, c);
+        const parser = b.list(b.any(.{ .a = b.literal("a"), .b = b.literal("b") }));
+
+        {
+            var parsed = parser.parse("aba", c).data;
+            try testing.expect(parsed == .value);
+            defer parser.deparseValue(&parsed.value, c);
+        }
     }
 
+    // Separated list
     {
-        var parsed = parser.parse("a,b,a,c", c).data;
-        try testing.expect(parsed == .err);
-        defer parser.deparseErr(&parsed.err, c);
+        const parser = b.separated_list(b.any(.{ .a = b.literal("a"), .b = b.literal("b") }), b.literal(","));
+
+        {
+            var parsed = parser.parse("a,b,a", c).data;
+            try testing.expect(parsed == .value);
+            defer parser.deparseValue(&parsed.value, c);
+        }
+
+        {
+            var parsed = parser.parse("a,b,a,c", c).data;
+            try testing.expect(parsed == .err);
+            defer parser.deparseErr(&parsed.err, c);
+        }
     }
 }
