@@ -418,9 +418,9 @@ pub fn init(comptime options: BuilderOptions) type {
                     var parsed = parser.parse(input, c);
                     switch (parsed.data) {
                         .value => |*v| {
-                            const ptr = c.allocator.create(parser.Value) catch |e| {
+                            const ptr = c.allocator.create(parser.Value) catch |alloc_e| {
                                 parser.deparseValue(v, c);
-                                return .{ .data = .{ .err = e }, .rest = parsed.rest };
+                                return .{ .data = .{ .err = alloc_e }, .rest = parsed.rest };
                             };
                             ptr.* = v.*;
                             return .{ .data = .{ .value = .{ .ptr = ptr } }, .rest = parsed.rest };
@@ -454,6 +454,11 @@ pub fn init(comptime options: BuilderOptions) type {
         pub fn recurse(comptime parser_init: anytype) type {
             return struct {
                 const parser = blk: {
+                    // Detect different signatures:
+                    // struct { pub fn init(self: type) type }
+                    // struct { pub fn init() type }
+                    // pub fn init(self: type) type
+                    // pub fn init() type
                     const f = if (@hasDecl(parser_init, "init")) parser_init.init else parser_init;
                     const info = @typeInfo(@TypeOf(f)).@"fn";
                     break :blk if (info.params.len == 0) f() else f(@This());
