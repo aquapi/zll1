@@ -1,4 +1,4 @@
-pub const parser = @import("./parser.zig");
+pub const builder = @import("./builder.zig");
 pub const utils = @import("./utils.zig");
 
 test {

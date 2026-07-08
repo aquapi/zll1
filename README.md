@@ -23,13 +23,8 @@ const zuws = b.dependency("zll1", .{
 exe.root_module.addImport("zll1", zuws.module("zll1"));
 ```
 
-See [./examples](./examples) for usages.
-
-To build examples:
+## Usage
+See [examples](./examples) for usage.
 ```sh
-# build json example
-zig build example -- json
-
-# build json example to asm
-zig build example-asm -- json
+zig build example -- bf
 ```

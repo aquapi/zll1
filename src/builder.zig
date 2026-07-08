@@ -29,7 +29,7 @@ pub const BuilderOptions = struct {
     whitespaces: []const u8 = " \n\r\t",
 };
 
-pub fn builder(comptime options: BuilderOptions) type {
+pub fn init(comptime options: BuilderOptions) type {
     return struct {
         pub const Context = options.ctx;
 
@@ -74,6 +74,30 @@ pub fn builder(comptime options: BuilderOptions) type {
 
                 pub inline fn deparseValue(_: *Value, _: Context) void {}
                 pub inline fn deparseErr(_: *Err, _: Context) void {}
+            };
+        }
+
+        pub fn discard(comptime parser: type) type {
+            return struct {
+                pub const Value = struct {};
+                pub const Err = parser.Err;
+
+                pub fn parse(input: []const u8, c: Context) ParsedResult(Value, Err) {
+                    var parsed = parser.parse(input, c);
+
+                    switch (parsed.data) {
+                        .value => |*v| {
+                            parser.deparseValue(v, c);
+                            return .{ .data = .{ .value = .{} }, .rest = parsed.rest };
+                        },
+                        .err => |e| return .{ .data = .{ .err = e }, .rest = parsed.rest },
+                    }
+                }
+
+                pub fn deparseValue(_: *Value, _: Context) void {}
+                pub inline fn deparseErr(e: *Err, c: Context) void {
+                    parser.deparseErr(e, c);
+                }
             };
         }
 
@@ -382,7 +406,13 @@ pub fn builder(comptime options: BuilderOptions) type {
                     }
                 };
 
-                pub const Err = mem.Allocator.Error!parser.Err;
+                pub const Err = mem.Allocator.Error!struct {
+                    ptr: *anyopaque,
+
+                    pub inline fn cast(self: @This()) *parser.Err {
+                        return @ptrCast(@alignCast(self.ptr));
+                    }
+                };
 
                 pub fn parse(input: []const u8, c: Context) ParsedResult(Value, Err) {
                     var parsed = parser.parse(input, c);
@@ -395,8 +425,13 @@ pub fn builder(comptime options: BuilderOptions) type {
                             ptr.* = v.*;
                             return .{ .data = .{ .value = .{ .ptr = ptr } }, .rest = parsed.rest };
                         },
-                        .err => |e| {
-                            return .{ .data = .{ .err = e }, .rest = parsed.rest };
+                        .err => |*e| {
+                            const ptr = c.allocator.create(parser.Err) catch |alloc_e| {
+                                parser.deparseErr(e, c);
+                                return .{ .data = .{ .err = alloc_e }, .rest = parsed.rest };
+                            };
+                            ptr.* = e.*;
+                            return .{ .data = .{ .err = .{ .ptr = ptr } }, .rest = parsed.rest };
                         },
                     }
                 }
@@ -408,8 +443,9 @@ pub fn builder(comptime options: BuilderOptions) type {
                 }
 
                 pub fn deparseErr(err: *Err, c: Context) void {
-                    var ptr = err.* catch return;
-                    parser.deparseErr(&ptr, c);
+                    const ptr = (err.* catch return).cast();
+                    parser.deparseErr(ptr, c);
+                    c.allocator.destroy(ptr);
                 }
             };
         }
@@ -443,7 +479,7 @@ pub fn builder(comptime options: BuilderOptions) type {
 
 const testing = std.testing;
 test "basic" {
-    const b = builder(.{ .ctx = struct {} });
+    const b = init(.{ .ctx = struct {} });
 
     const parser = b.tuple(.{ .prefix = b.any(.{ .a = b.literal("a"), .b = b.literal("b") }), .suffix = b.either(b.literal("c")) });
     const c: b.Context = .{};
@@ -462,7 +498,7 @@ test "basic" {
 }
 
 test "recursive" {
-    const b = builder(.{});
+    const b = init(.{});
 
     const parser = b.recurse(struct {
         pub fn init(self: type) type {
@@ -485,7 +521,7 @@ test "recursive" {
 }
 
 test "list" {
-    const b = builder(.{});
+    const b = init(.{});
     const c: b.Context = .{ .allocator = testing.allocator };
 
     // List
