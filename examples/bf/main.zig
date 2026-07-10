@@ -39,12 +39,12 @@ pub fn main(init: std.process.Init) !void {
             \\>++++++++[<+++++++++>-]<.>++++[<+++++++>-]<+.+++++++..+++.>>++++++[<+++++++>-]<+
             \\+.------------.>++++++[<+++++++++>-]<+.<.+++.------.--------.>>>++++[<++++++++>-
             \\]<+.
-        , ctx).data;
+        , ctx);
 
         switch (result) {
             .value => |*value| {
-                defer program.deparseValue(value, ctx);
-                std.debug.print("[hello-world] parsed: {any}", .{value.*});
+                defer program.deparseValue(&value.data, ctx);
+                std.debug.print("[hello-world] parsed: {any}", .{value.data});
             },
             .err => |*err| {
                 defer program.deparseErr(err, ctx);
