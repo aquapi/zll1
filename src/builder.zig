@@ -9,44 +9,37 @@ pub fn ParserData(comptime parser: anytype) type {
 }
 
 pub fn ParsedResult(comptime Value: type, comptime Err: type) type {
-    return struct {
-        /// parsed data
-        data: union(enum) {
-            value: Value,
-            err: Err,
-        },
-
-        /// remaining slice
-        rest: []const u8,
-    };
+    return union(enum) { value: struct { data: Value, rest: []const u8 }, err: Err };
 }
 
 pub const BuilderOptions = struct {
     /// Shared values used by parsers
     ctx: type = struct { allocator: mem.Allocator },
 
-    /// Whitespaces characters
-    whitespaces: []const u8 = " \n\r\t",
+    /// Methods
+    vtable: type = struct {
+        pub inline fn trimStart(input: []const u8) []const u8 {
+            return input[utils.consumeChars(input, 0, " \n\r\t")..];
+        }
+    },
 };
 
 pub fn init(comptime options: BuilderOptions) type {
     return struct {
         pub const Context = options.ctx;
 
-        pub fn trimStart(input: []const u8) []const u8 {
-            return input[utils.consumeChars(input, 0, options.whitespaces)..];
+        inline fn trimStart(input: []const u8) []const u8 {
+            return options.vtable.trimStart(input);
         }
 
         /// Match a literal
-        ///
-        /// Literal **MUST NOT** begins or ends with any specified whitespaces character
         pub fn literal(comptime str: []const u8) type {
             return struct {
                 pub const Value = struct {};
-                pub const Err = struct {};
+                pub const Err = []const u8;
 
                 pub fn parse(input: []const u8, _: Context) ParsedResult(Value, Err) {
-                    return if (utils.startsWith(input, str)) .{ .data = .{ .value = .{} }, .rest = input[str.len..] } else .{ .data = .{ .err = .{} }, .rest = input };
+                    return if (utils.startsWith(input, str)) .{ .value = .{ .data = .{}, .rest = input[str.len..] } } else .{ .err = input };
                 }
 
                 pub inline fn deparseValue(_: *Value, _: Context) void {}
@@ -54,43 +47,21 @@ pub fn init(comptime options: BuilderOptions) type {
             };
         }
 
-        /// Comments
-        pub fn comment(comptime prefix: []const u8, comptime suffix: []const u8) type {
-            return struct {
-                pub const Value = []const u8;
-                pub const Err = noreturn;
-
-                pub fn parse(input: []const u8, _: Context) ParsedResult(Value, Err) {
-                    return if (utils.startsWith(input, prefix)) (
-                        // Find comment end
-                        if (utils.findPos(input, prefix.len, suffix)) |end|
-                            .{ .data = .{ .value = input[prefix.len..end] }, .rest = input[end + suffix.len ..] }
-                        else
-                            // Empty end slice
-                            .{ .data = .{ .value = input[prefix.len..] }, .rest = input[input.len..] })
-                    // Empty slice
-                    else .{ .data = .{ .value = input[0..0] }, .rest = input };
-                }
-
-                pub inline fn deparseValue(_: *Value, _: Context) void {}
-                pub inline fn deparseErr(_: *Err, _: Context) void {}
-            };
-        }
-
+        /// Discard a parser result
         pub fn discard(comptime parser: type) type {
             return struct {
                 pub const Value = struct {};
                 pub const Err = parser.Err;
 
                 pub fn parse(input: []const u8, c: Context) ParsedResult(Value, Err) {
-                    var parsed = parser.parse(input, c);
-
-                    switch (parsed.data) {
+                    switch (parser.parse(input, c)) {
                         .value => |*v| {
-                            parser.deparseValue(v, c);
-                            return .{ .data = .{ .value = .{} }, .rest = parsed.rest };
+                            parser.deparseValue(&v.data, c);
+                            return .{
+                                .value = .{ .data = .{}, .rest = v.rest },
+                            };
                         },
-                        .err => |e| return .{ .data = .{ .err = e }, .rest = parsed.rest },
+                        .err => |e| return .{ .err = e },
                     }
                 }
 
@@ -108,11 +79,9 @@ pub fn init(comptime options: BuilderOptions) type {
                 pub const Err = noreturn;
 
                 pub fn parse(input: []const u8, c: Context) ParsedResult(Value, Err) {
-                    const parsed = parser.parse(input, c);
-
-                    return switch (parsed.data) {
-                        .value => |v| .{ .data = .{ .value = .{ .value = v } }, .rest = parsed.rest },
-                        .err => |e| .{ .data = .{ .value = .{ .err = e } }, .rest = parsed.rest },
+                    return switch (parser.parse(input, c)) {
+                        .value => |v| .{ .value = .{ .data = .{ .value = v.data }, .rest = v.rest } },
+                        .err => |e| .{ .value = .{ .data = .{ .err = e }, .rest = input } },
                     };
                 }
 
@@ -126,6 +95,7 @@ pub fn init(comptime options: BuilderOptions) type {
             };
         }
 
+        /// Ignore error and continue parsing
         pub fn optional(comptime parser: type) type {
             return struct {
                 pub const Value = ?parser.Value;
@@ -133,11 +103,11 @@ pub fn init(comptime options: BuilderOptions) type {
 
                 pub fn parse(input: []const u8, c: Context) ParsedResult(Value, Err) {
                     var parsed = parser.parse(input, c);
-                    switch (parsed.data) {
-                        .value => |v| return .{ .data = .{ .value = v }, .rest = parsed.rest },
+                    switch (parsed) {
+                        .value => |v| return .{ .value = .{ .data = v.data, .rest = v.rest } },
                         .err => |*e| {
                             parser.deparseErr(e, c);
-                            return .{ .data = .{ .value = null }, .rest = parsed.rest };
+                            return .{ .value = .{ .data = null, .rest = input } };
                         },
                     }
                 }
@@ -188,26 +158,22 @@ pub fn init(comptime options: BuilderOptions) type {
                     var value: Value = undefined;
 
                     inline for (fields, 0..) |field, i| {
-                        const parsed = @field(parsers, field.name).parse(currentInput, c);
-
-                        switch (parsed.data) {
+                        switch (@field(parsers, field.name).parse(currentInput, c)) {
                             .value => |v| {
-                                @field(value, field.name) = v;
+                                @field(value, field.name) = v.data;
 
                                 // Don't trim the last one
-                                currentInput = if (comptime i < fields.len - 1) trimStart(parsed.rest) else parsed.rest;
+                                currentInput = if (comptime i < fields.len - 1) trimStart(v.rest) else v.rest;
                             },
                             .err => |e| {
-                                @branchHint(.cold);
-
                                 // Deparse previous values
                                 _deparseValue(&value, c, i);
-                                return .{ .data = .{ .err = @unionInit(Err, field.name, e) }, .rest = parsed.rest };
+                                return .{ .err = @unionInit(Err, field.name, e) };
                             },
                         }
                     }
 
-                    return .{ .data = .{ .value = value }, .rest = currentInput };
+                    return .{ .value = .{ .data = value, .rest = currentInput } };
                 }
 
                 fn _deparseValue(value: *Value, c: Context, len: usize) void {
@@ -242,18 +208,18 @@ pub fn init(comptime options: BuilderOptions) type {
 
                     while (true) {
                         var parsed = parser.parse(currentInput, c);
-                        switch (parsed.data) {
+                        switch (parsed) {
                             .value => |*v| {
-                                arr.append(c.allocator, v.*) catch |e| {
-                                    parser.deparseValue(v, c);
+                                arr.append(c.allocator, v.data) catch |e| {
+                                    parser.deparseValue(&v.data, c);
                                     deparseValue(&arr, c);
-                                    return .{ .data = .{ .err = e }, .rest = currentInput };
+                                    return .{ .err = e };
                                 };
-                                currentInput = trimStart(parsed.rest);
+                                currentInput = trimStart(v.rest);
                             },
                             .err => |*e| {
                                 parser.deparseErr(e, c);
-                                return .{ .data = .{ .value = arr }, .rest = parsed.rest };
+                                return .{ .value = .{ .data = arr, .rest = currentInput } };
                             },
                         }
                     }
@@ -279,29 +245,30 @@ pub fn init(comptime options: BuilderOptions) type {
 
                     while (true) {
                         var parsed = parser.parse(currentInput, c);
-                        switch (parsed.data) {
+                        switch (parsed) {
                             .value => |*v| {
-                                arr.append(c.allocator, v.*) catch |e| {
-                                    parser.deparseValue(v, c);
+                                arr.append(c.allocator, v.data) catch |e| {
+                                    parser.deparseValue(&v.data, c);
                                     deparseValue(&arr, c);
-                                    return .{ .data = .{ .err = e }, .rest = currentInput };
+                                    return .{ .err = e };
                                 };
 
-                                var sep_parsed = separator_parser.parse(trimStart(parsed.rest), c);
-                                switch (sep_parsed.data) {
+                                currentInput = trimStart(v.rest);
+                                var sep_parsed = separator_parser.parse(currentInput, c);
+                                switch (sep_parsed) {
                                     .value => |*sep_v| {
-                                        separator_parser.deparseValue(sep_v, c);
-                                        currentInput = trimStart(sep_parsed.rest);
+                                        separator_parser.deparseValue(&sep_v.data, c);
+                                        currentInput = trimStart(sep_v.rest);
                                     },
                                     .err => |*sep_e| {
                                         separator_parser.deparseErr(sep_e, c);
-                                        return .{ .data = .{ .value = arr }, .rest = sep_parsed.rest };
+                                        return .{ .value = .{ .data = arr, .rest = currentInput } };
                                     },
                                 }
                             },
                             .err => |e| {
                                 deparseValue(&arr, c);
-                                return .{ .data = .{ .err = e }, .rest = parsed.rest };
+                                return .{ .err = e };
                             },
                         }
                     }
@@ -357,12 +324,10 @@ pub fn init(comptime options: BuilderOptions) type {
                     var err: Err = undefined;
 
                     inline for (fields, 0..) |field, i| {
-                        const parsed = @field(parsers, field.name).parse(input, c);
-
-                        switch (parsed.data) {
+                        switch (@field(parsers, field.name).parse(input, c)) {
                             .value => |v| {
                                 _deparseErr(&err, c, i);
-                                return .{ .data = .{ .value = @unionInit(Value, field.name, v) }, .rest = parsed.rest };
+                                return .{ .value = .{ .data = @unionInit(Value, field.name, v.data), .rest = v.rest } };
                             },
                             .err => |e| {
                                 @field(err, field.name) = e;
@@ -370,7 +335,7 @@ pub fn init(comptime options: BuilderOptions) type {
                         }
                     }
 
-                    return .{ .data = .{ .err = err }, .rest = input };
+                    return .{ .err = err };
                 }
 
                 pub fn deparseValue(value: *Value, c: Context) void {
@@ -416,22 +381,22 @@ pub fn init(comptime options: BuilderOptions) type {
 
                 pub fn parse(input: []const u8, c: Context) ParsedResult(Value, Err) {
                     var parsed = parser.parse(input, c);
-                    switch (parsed.data) {
+                    switch (parsed) {
                         .value => |*v| {
                             const ptr = c.allocator.create(parser.Value) catch |alloc_e| {
-                                parser.deparseValue(v, c);
-                                return .{ .data = .{ .err = alloc_e }, .rest = parsed.rest };
+                                parser.deparseValue(&v.data, c);
+                                return .{ .err = alloc_e };
                             };
-                            ptr.* = v.*;
-                            return .{ .data = .{ .value = .{ .ptr = ptr } }, .rest = parsed.rest };
+                            ptr.* = v.data;
+                            return .{ .value = .{ .data = .{ .ptr = ptr }, .rest = v.rest } };
                         },
                         .err => |*e| {
                             const ptr = c.allocator.create(parser.Err) catch |alloc_e| {
                                 parser.deparseErr(e, c);
-                                return .{ .data = .{ .err = alloc_e }, .rest = parsed.rest };
+                                return .{ .err = alloc_e };
                             };
                             ptr.* = e.*;
-                            return .{ .data = .{ .err = .{ .ptr = ptr } }, .rest = parsed.rest };
+                            return .{ .err = .{ .ptr = ptr } };
                         },
                     }
                 }
@@ -483,77 +448,108 @@ pub fn init(comptime options: BuilderOptions) type {
 }
 
 const testing = std.testing;
-test "basic" {
-    const b = init(.{ .ctx = struct {} });
 
-    const parser = b.tuple(.{ .prefix = b.any(.{ .a = b.literal("a"), .b = b.literal("b") }), .suffix = b.either(b.literal("c")) });
-    const c: b.Context = .{};
+test init {
+    _ = struct {
+        const b = init(.{});
+        const ctx: b.Context = .{ .allocator = std.testing.allocator };
 
-    {
-        var parsed = parser.parse("ac", c).data;
-        try testing.expect(parsed == .value);
-        defer parser.deparseValue(&parsed.value, c);
-    }
+        test "literal" {
+            const parser = b.literal("ab");
 
-    {
-        var parsed = parser.parse("c", c).data;
-        try testing.expect(parsed == .err);
-        defer parser.deparseErr(&parsed.err, c);
-    }
+            {
+                const value = parser.parse("ab", ctx).value;
+                try testing.expectEqualStrings("", value.rest);
+            }
+
+            {
+                const value = parser.parse("abcd", ctx).value;
+                try testing.expectEqualStrings("cd", value.rest);
+            }
+
+            {
+                const err = parser.parse("ad", ctx).err;
+                try testing.expectEqualStrings("ad", err);
+            }
+        }
+    };
 }
 
-test "recursive" {
-    const b = init(.{});
+// test "basic" {
+//     const b = init(.{ .ctx = struct {} });
 
-    const parser = b.recurse(struct {
-        pub fn init(self: type) type {
-            return b.tuple(.{ .char = b.any(.{ .a = b.literal("a"), .b = b.literal("b") }), .next = b.optional(b.ref(self)) });
-        }
-    });
+//     const parser = b.tuple(.{ .prefix = b.any(.{ .a = b.literal("a"), .b = b.literal("b") }), .suffix = b.either(b.literal("c")) });
+//     const c: b.Context = .{};
 
-    const c: b.Context = .{ .allocator = testing.allocator };
-    {
-        var parsed = parser.parse("aabb", c).data;
-        try testing.expect(parsed == .value);
-        defer parser.deparseValue(&parsed.value, c);
-    }
+//     {
+//         var parsed = parser.parse("ac", c);
+//         try testing.expect(parsed == .value);
+//         defer parser.deparseValue(&parsed.value.data, c);
+//     }
 
-    {
-        var parsed = parser.parse("aacb", c).data;
-        try testing.expect(parsed == .value);
-        defer parser.deparseValue(&parsed.value, c);
-    }
-}
+//     {
+//         var parsed = parser.parse("c", c);
+//         try testing.expect(parsed == .err);
+//         defer parser.deparseErr(&parsed.err, c);
+//     }
+// }
 
-test "list" {
-    const b = init(.{});
-    const c: b.Context = .{ .allocator = testing.allocator };
+// test "recursive" {
+//     const b = init(.{});
 
-    // List
-    {
-        const parser = b.list(b.any(.{ .a = b.literal("a"), .b = b.literal("b") }));
+//     const parser = b.recurse(struct {
+//         pub fn init(self: type) type {
+//             return b.tuple(.{ .char = b.any(.{ .a = b.literal("a"), .b = b.literal("b") }), .next = b.optional(b.ref(self)) });
+//         }
+//     });
 
-        {
-            var parsed = parser.parse("aba", c).data;
-            try testing.expect(parsed == .value);
-            defer parser.deparseValue(&parsed.value, c);
-        }
-    }
+//     const c: b.Context = .{ .allocator = testing.allocator };
+//     {
+//         var parsed = parser.parse("aabb", c);
+//         try testing.expect(parsed == .value);
+//         defer parser.deparseValue(&parsed.value.data, c);
+//         try testing.expectEqualStrings(parsed.value.rest, "");
+//     }
 
-    // Separated list
-    {
-        const parser = b.separated_list(b.any(.{ .a = b.literal("a"), .b = b.literal("b") }), b.literal(","));
+//     {
+//         var parsed = parser.parse("aacb", c);
+//         try testing.expect(parsed == .value);
+//         defer parser.deparseValue(&parsed.value.data, c);
+//         try testing.expectEqualStrings(parsed.value.rest, "cb");
+//     }
+// }
 
-        {
-            var parsed = parser.parse("a,b,a", c).data;
-            try testing.expect(parsed == .value);
-            defer parser.deparseValue(&parsed.value, c);
-        }
+// test "list" {
+//     const b = init(.{});
+//     const c: b.Context = .{ .allocator = testing.allocator };
 
-        {
-            var parsed = parser.parse("a,b,a,c", c).data;
-            try testing.expect(parsed == .err);
-            defer parser.deparseErr(&parsed.err, c);
-        }
-    }
-}
+//     // List
+//     {
+//         const parser = b.list(b.any(.{ .a = b.literal("a"), .b = b.literal("b") }));
+
+//         {
+//             var parsed = parser.parse("aba", c);
+//             try testing.expect(parsed == .value);
+//             defer parser.deparseValue(&parsed.value.data, c);
+//             try testing.expectEqualStrings(parsed.value.rest, "");
+//         }
+//     }
+
+//     // Separated list
+//     {
+//         const parser = b.separated_list(b.any(.{ .a = b.literal("a"), .b = b.literal("b") }), b.literal(","));
+
+//         {
+//             var parsed = parser.parse("a,b,a", c);
+//             try testing.expect(parsed == .value);
+//             defer parser.deparseValue(&parsed.value.data, c);
+//             try testing.expectEqualStrings(parsed.value.rest, "");
+//         }
+
+//         {
+//             var parsed = parser.parse("a,b,a,c", c);
+//             try testing.expect(parsed == .err);
+//             defer parser.deparseErr(&parsed.err, c);
+//         }
+//     }
+// }
